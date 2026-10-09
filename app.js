@@ -9,7 +9,7 @@ const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'Files.ReadWrite offline_access';
 const DEFAULTS = { rootPath: 'Personal Documents/Tax/Tax27', receiptsFolder: 'Receipts', workbook: 'PTR Calculations 27.xlsx' };
 const LOCK_AFTER_MS = 2 * 60 * 1000;
-const APP_VERSION = '12';
+const APP_VERSION = '13';
 const MAX_UPLOAD = 100 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
@@ -1147,6 +1147,7 @@ function processStatus(it) {
   if (filed && f.name) lines.push(`Filed: ${where}`);
   if (lg.sheet) lines.push(lg.duplicate ? `Already in the workbook (${lg.sheet}, row ${lg.row}), so I did not add it again.` : `Added to the workbook: ${lg.sheet}, row ${lg.row}.`);
   else if (lg.csv) lines.push('Added to your capital gains costs list (cgt-costs.csv), not to the deductions.');
+  if (it.warnNote) lines.push(`Heads up: ${it.warnNote}`);
   if (it.processNote && !it.loggedAt) lines.push(`Not in the workbook yet: ${it.processNote}.`);
   else if (!filed) lines.push(d.treatment === 'claim' ? 'Waiting to be filed and added to the workbook.' : 'Waiting to be filed.');
   else if (!it.loggedAt && (d.treatment === 'claim' || d.treatment === 'cgt')) lines.push(d.treatment === 'claim' ? 'Waiting to be added to the workbook.' : 'Waiting to be added to your capital gains list.');
