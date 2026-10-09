@@ -209,6 +209,14 @@
   .date-box { flex: none; width: 48px; text-align: center; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); padding: 4px 0; }
   .date-box b { display: block; font-size: 18px; line-height: 1.1; }
   .date-box small { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .task { display: flex; gap: 12px; align-items: flex-start; width: 100%; padding: 10px 0; border: 0; border-top: 1px solid var(--line); background: transparent; text-align: left; }
+  .task:first-child { border-top: 0; padding-top: 0; }
+  .task .meta b, .task .meta small { white-space: normal; overflow: visible; text-overflow: clip; }
+  .check { flex: none; width: 26px; height: 26px; margin-top: 1px; border-radius: 8px; border: 2px solid var(--muted); display: grid; place-items: center; }
+  .check svg { width: 18px; height: 18px; }
+  .task[aria-checked="true"] .check { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .task[aria-checked="true"] b { text-decoration: line-through; color: var(--muted); font-weight: 500; }
+  .task small.late { color: var(--danger); font-weight: 650; }
   .btn.gold { background: #f5be14; border-color: #f5be14; color: #2a1d00; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pill.warn { color: #f5be14; } }
 

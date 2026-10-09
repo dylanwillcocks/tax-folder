@@ -638,6 +638,116 @@ function summaryEmailHref() {
   return `mailto:${c.accountantEmail}?subject=${encodeURIComponent(`FY${fy % 100} tax position: Dylan Willcocks`)}&body=${encodeURIComponent(lines.join('\n'))}`;
 }
 
+
+/* ---------- tax tasks (checklist) + calendar reminders (.ics) ---------- */
+const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const TASKS_AHEAD_DAYS = 45, TASKS_STALE_DAYS = 40;
+const slug = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+
+// ms === null means "do it now"; otherwise the day it falls due (UTC midnight of that calendar day).
+function buildTasks() {
+  const fy = fyEnd(), acc = cfg().accountantName;
+  const d = state.position && state.position.data;
+  const out = [];
+  const add = (id, title, ms, note) => out.push({ id, title, ms, note });
+  for (let m = 1; m <= 12; m++) {               // on the 1st: file the month that just finished
+    const prev = new Date(Date.UTC(fy - 1, 5 + m, 1));
+    add(`receipts-${prev.getUTCFullYear()}-${prev.getUTCMonth() + 1}`, `File ${MONTHS_LONG[prev.getUTCMonth()]}'s receipts`,
+      Date.UTC(fy - 1, 6 + m, 1), 'Add the month\'s receipts to your Receipts folder.');
+  }
+  add(`accountant-${fy}-sep`, `Send ${acc} an update (September quarter)`, Date.UTC(fy - 1, 9, 7), 'Use the Email summary button on the Position tab.');
+  add(`accountant-${fy}-dec`, `Send ${acc} an update (December quarter)`, Date.UTC(fy, 0, 7), 'Use the Email summary button on the Position tab.');
+  add(`accountant-${fy}-mar`, `Send ${acc} an update (March quarter)`, Date.UTC(fy, 3, 7), 'Use the Email summary button on the Position tab.');
+  add(`sweep-${fy}`, 'Final receipts sweep before 30 June', Date.UTC(fy, 5, 15), 'Check Receipts and the workbook are complete for the year.');
+  add(`accountant-${fy}-final`, `Send ${acc} your full-year summary`, Date.UTC(fy, 6, 1), 'Use the Email summary button on the Position tab.');
+  add(`lodge-${fy}`, `Lodgement: confirm the plan with ${acc}`, Date.UTC(fy, 9, 1), 'The self-lodgement deadline is 31 October.');
+  if (d) {
+    const hasGain = d.items.some((i) => /capital gain/i.test(i.label) && i.total);
+    for (const x of d.dates) {
+      if (!hasGain && /\b(sold|sale|disposed)\b/i.test(x.label)) {
+        add(`cgt-${slug(x.label)}`, `Work out the capital gain: ${x.label}`, null, 'Add the gain to the workbook so your tax position includes it.');
+      }
+    }
+  }
+  return out;
+}
+const tasksDone = () => ls.get('tasksDone', {});
+function dueText(ms) {
+  if (ms === null) return 'Do now';
+  const n = Math.round((ms - todayUTC()) / DAY);
+  const dt = new Date(ms);
+  const when = `${dt.getUTCDate()} ${MONTHS[dt.getUTCMonth()]}`;
+  return n < 0 ? `Overdue: ${when}` : n === 0 ? 'Due today' : n === 1 ? 'Due tomorrow' : `Due ${when} (in ${n} days)`;
+}
+function visibleTasks() {
+  const t0 = todayUTC(), done = tasksDone();
+  const all = buildTasks();
+  const shown = all.filter((t) => t.ms === null || (t.ms - t0 <= TASKS_AHEAD_DAYS * DAY && (t0 - t.ms <= TASKS_STALE_DAYS * DAY || done[t.id])));
+  const key = (t) => (t.ms === null ? t0 : t.ms);
+  return {
+    open: shown.filter((t) => !done[t.id]).sort((a, b) => key(a) - key(b)),
+    closed: shown.filter((t) => done[t.id] && (t.ms === null || t0 - t.ms <= TASKS_STALE_DAYS * DAY)),
+    later: all.filter((t) => t.ms !== null && t.ms - t0 > TASKS_AHEAD_DAYS * DAY && !done[t.id]).length,
+  };
+}
+function toggleTask(id) {
+  const done = tasksDone();
+  if (done[id]) delete done[id]; else done[id] = Date.now();
+  ls.set('tasksDone', done);
+  renderHome();
+}
+function taskRow(t, isDone) {
+  const late = t.ms !== null && t.ms < todayUTC() && !isDone;
+  return h('button', { class: 'task', type: 'button', role: 'checkbox', 'aria-checked': String(isDone), onclick: () => toggleTask(t.id) },
+    h('span', { class: 'check', 'aria-hidden': 'true' }, isDone ? svg('<path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>') : null),
+    h('span', { class: 'meta' }, h('b', {}, t.title), h('small', { class: late ? 'late' : '' }, isDone ? 'Done' : dueText(t.ms)), isDone ? null : h('small', {}, t.note)));
+}
+function renderTasks(box) {
+  const { open, closed, later } = visibleTasks();
+  box.append(sect('To do'));
+  const wrap = card();
+  if (!open.length) wrap.append(h('p', { class: 'muted' }, 'Nothing due in the next 45 days.'));
+  for (const t of open) wrap.append(taskRow(t, false));
+  for (const t of closed) wrap.append(taskRow(t, true));
+  if (later) wrap.append(h('p', { class: 'note', style: 'margin-top:8px' }, `${later} more later this year.`));
+  wrap.append(h('button', { class: 'btn block', type: 'button', style: 'margin-top:12px', onclick: exportReminders }, 'Add reminders to my phone calendar'));
+  wrap.append(h('p', { class: 'note', style: 'margin-top:8px' }, 'Adds an alert at 9 am on each due date to your calendar app. Re-adding updates the same reminders rather than doubling them.'));
+  box.append(wrap);
+}
+
+const icsText = (v) => String(v).replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\;');
+const icsFold = (line) => { const out = []; let l = line; while (l.length > 74) { out.push(l.slice(0, 74)); l = ' ' + l.slice(74); } out.push(l); return out.join('\r\n'); };
+const p2 = (n) => String(n).padStart(2, '0');
+function buildIcs() {
+  const t0 = todayUTC(), done = tasksDone();
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const todo = buildTasks().filter((t) => !done[t.id] && (t.ms === null || t.ms >= t0));
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Tax Folder//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
+  for (const t of todo) {
+    const dt = new Date(t.ms === null ? t0 + DAY : t.ms);
+    const day = `${dt.getUTCFullYear()}${p2(dt.getUTCMonth() + 1)}${p2(dt.getUTCDate())}`;
+    lines.push('BEGIN:VEVENT', `UID:taxfolder-${t.id}@tax-folder`, `DTSTAMP:${stamp}`,
+      `DTSTART:${day}T090000`, `DTEND:${day}T091500`,
+      `SUMMARY:${icsText('Tax: ' + t.title)}`, `DESCRIPTION:${icsText(t.note + ' Open the Tax Folder app: ' + redirectUri())}`,
+      'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText('Tax: ' + t.title)}`, 'TRIGGER:PT0M', 'END:VALARM', 'END:VEVENT');
+  }
+  lines.push('END:VCALENDAR');
+  return { count: todo.length, text: lines.map(icsFold).join('\r\n') + '\r\n' };
+}
+async function exportReminders() {
+  const ics = buildIcs();
+  if (!ics.count) { toast('Nothing to add right now.'); return; }
+  const file = new File([ics.text], 'tax-reminders.ics', { type: 'text/calendar' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: 'Tax reminders' }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  const url = URL.createObjectURL(file);
+  const a = h('a', { href: url, download: 'tax-reminders.ics' });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  toast(`${ics.count} reminders ready. Open the file to add them to your calendar.`);
+}
+
 /* ---------- home screen ---------- */
 const aud0 = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
 const aud2 = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
@@ -700,6 +810,8 @@ function renderHome() {
   box.append(h('div', { class: 'tiles' },
     h('div', { class: 'tile in' }, h('small', {}, 'Income'), h('b', {}, money(d.income))),
     h('div', { class: 'tile' }, h('small', {}, 'Deductions'), h('b', {}, money(d.deductions)))));
+
+  renderTasks(box);
 
   /* indicative tax */
   const est = estimateTax(d.net, fy);
