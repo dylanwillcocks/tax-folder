@@ -234,6 +234,33 @@
   .lock .btn.quiet { color: #bccdee; }
   .lockrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }
   .lockrow p { font-size: 13px; }
+  /* scanner */
+  .scan { position: fixed; inset: 0; z-index: 60; background: var(--bg); display: flex; flex-direction: column; }
+  .scan-top { display: flex; align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .scan-top b { flex: 1; text-align: center; font-size: 17px; }
+  .scan-top .btn { min-height: 40px; padding: 0 14px; }
+  .scan-body { flex: 1; overflow: auto; width: 100%; max-width: 640px; margin: 0 auto; padding: 12px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .scan-pane { display: grid; gap: 12px; justify-items: center; }
+  .scan-pane > * { max-width: 100%; }
+  .scan-pane > .btn.block, .scan-pane > p { width: 100%; }
+  .scan-tools { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .chip:disabled { opacity: .4; }
+  .crop-stage { position: relative; touch-action: none; border-radius: 10px; overflow: visible; background: #000; }
+  .crop-stage canvas { position: absolute; left: 0; top: 0; border-radius: 10px; }
+  .crop-handle { position: absolute; width: 48px; height: 48px; margin: -24px 0 0 -24px; touch-action: none; cursor: grab; }
+  .crop-handle::after { content: ""; position: absolute; left: 14px; top: 14px; width: 20px; height: 20px; border-radius: 50%; background: #ff8a1f; border: 3px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5); }
+  .crop-loupe { position: absolute; width: 100px; height: 100px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.5); pointer-events: none; }
+  .enhance-canvas { border-radius: 8px; box-shadow: 0 2px 14px rgba(0,0,0,.25); background: #fff; }
+  .scan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; width: 100%; }
+  .scan-thumb { position: relative; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: #fff; aspect-ratio: 3 / 4; }
+  .scan-thumb img { width: 100%; height: 100%; object-fit: contain; }
+  .scan-thumb span { position: absolute; left: 6px; bottom: 6px; background: var(--accent); color: var(--accent-ink); border-radius: 99px; min-width: 22px; padding: 0 6px; text-align: center; font-size: 12px; font-weight: 700; }
+  .scan-del { position: absolute; right: 4px; top: 4px; width: 32px; height: 32px; border-radius: 50%; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 20px; line-height: 1; }
+  .banner.info { background: var(--accent-soft); color: var(--accent); }
+  .banner.warn { background: var(--orange-soft); color: var(--orange-ink); }
+  .scan-busy { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; background: color-mix(in srgb, var(--bg) 80%, transparent); font-weight: 650; }
+  .scan-busy .spinner { margin: 0; }
 </style>
 </head>
 <body>
@@ -308,6 +335,7 @@
     <div class="card capture">
       <img id="preview" class="preview" alt="Preview of the selected receipt" hidden>
       <div id="capture-empty" class="capture-empty">
+        <button id="btn-scan" class="btn orange block" type="button">Scan a document</button>
         <label class="btn primary block">Take a photo
           <input id="in-camera" class="sr" type="file" accept="image/*" capture="environment">
         </label>
@@ -354,6 +382,67 @@
     Add receipt
   </button>
 </nav>
+
+<div id="scan" class="scan" hidden role="dialog" aria-label="Scan a document">
+  <header class="scan-top">
+    <button id="scan-cancel" class="btn quiet" type="button">Cancel</button>
+    <button id="scan-back" class="btn quiet" type="button" hidden>Back</button>
+    <b id="scan-title">Scan</b>
+    <button id="scan-primary" class="btn orange" type="button" hidden>Done</button>
+  </header>
+  <div class="scan-body">
+    <div id="scan-msg" class="banner" role="status" hidden></div>
+
+    <section id="scan-capture" class="scan-pane">
+      <p class="muted">Lay the page on a darker surface in good light. The app finds the edges, straightens the page and cleans it up. Add as many pages as you like, then save one PDF.</p>
+      <label class="btn primary block">Take a photo
+        <input id="scan-cam" class="sr" type="file" accept="image/*" capture="environment">
+      </label>
+      <label class="btn block">Choose a photo
+        <input id="scan-pick" class="sr" type="file" accept="image/*">
+      </label>
+    </section>
+
+    <section id="scan-crop" class="scan-pane" hidden>
+      <div id="crop-stage" class="crop-stage">
+        <canvas id="crop-canvas"></canvas>
+        <canvas id="crop-overlay"></canvas>
+        <canvas id="crop-loupe" class="crop-loupe" width="100" height="100" hidden></canvas>
+        <span class="crop-handle" data-i="0" aria-label="Top left corner"></span>
+        <span class="crop-handle" data-i="1" aria-label="Top right corner"></span>
+        <span class="crop-handle" data-i="2" aria-label="Bottom right corner"></span>
+        <span class="crop-handle" data-i="3" aria-label="Bottom left corner"></span>
+      </div>
+      <div class="scan-tools">
+        <button id="scan-auto" class="chip" type="button">Find page</button>
+        <button id="scan-full" class="chip" type="button">Whole photo</button>
+        <button id="scan-rotate" class="chip" type="button">Rotate</button>
+      </div>
+    </section>
+
+    <section id="scan-enhance" class="scan-pane" hidden>
+      <canvas id="enhance-canvas" class="enhance-canvas"></canvas>
+      <div id="scan-filters" class="scan-tools">
+        <button class="chip" type="button" data-f="original" aria-pressed="false">Original</button>
+        <button class="chip" type="button" data-f="clean" aria-pressed="true">Clean</button>
+        <button class="chip" type="button" data-f="bw" aria-pressed="false">Black &amp; white</button>
+      </div>
+    </section>
+
+    <section id="scan-review" class="scan-pane" hidden>
+      <div id="scan-grid" class="scan-grid"></div>
+      <button id="scan-add" class="btn block" type="button">Add another page</button>
+      <div class="scan-tools">
+        <span class="muted">Save as</span>
+        <span id="scan-format" class="scan-tools">
+          <button class="chip" type="button" data-f="pdf" aria-pressed="true">PDF</button>
+          <button class="chip" type="button" data-f="jpg" aria-pressed="false">JPEG</button>
+        </span>
+      </div>
+    </section>
+  </div>
+  <div id="scan-busy" class="scan-busy" hidden><div class="spinner"></div><span>Working…</span></div>
+</div>
 
 <div id="lock" class="lock" hidden>
   <div class="lock-card">
@@ -406,6 +495,7 @@
   </form>
 </dialog>
 
+<script src="scan.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

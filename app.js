@@ -436,15 +436,27 @@ async function onPicked(file) {
       const m = /\.[a-z0-9]{1,5}$/i.exec(file.name);
       ext = m ? m[0].toLowerCase() : file.type === 'application/pdf' ? '.pdf' : '';
     }
-    if (state.pending && state.pending.previewUrl) URL.revokeObjectURL(state.pending.previewUrl);
-    const previewUrl = blob.type.startsWith('image/') ? URL.createObjectURL(blob) : '';
-    state.pending = { blob, ext, name: file.name, previewUrl };
-    $('capture-empty').hidden = true; $('btn-clear').hidden = false;
-    if (previewUrl) { $('preview').src = previewUrl; $('preview').hidden = false; $('file-name').hidden = true; }
-    else { $('preview').hidden = true; $('file-name').textContent = `${file.name} · ${fmtSize(blob.size)}`; $('file-name').hidden = false; }
+    setPending(blob, ext, file.name, {});
     updateNamePreview();
     if (!$('f-vendor').value) $('f-vendor').focus({ preventScroll: true });
   } catch (e) { banner(friendly(e)); }
+}
+
+// Shows a file ready to be saved. For a scan the blob is a PDF and previewBlob is its first page.
+function setPending(blob, ext, name, { previewBlob = null, info = '' } = {}) {
+  if (state.pending && state.pending.previewUrl) URL.revokeObjectURL(state.pending.previewUrl);
+  const shown = previewBlob || (blob.type.startsWith('image/') ? blob : null);
+  const previewUrl = shown ? URL.createObjectURL(shown) : '';
+  state.pending = { blob, ext, name, previewUrl };
+  $('capture-empty').hidden = true; $('btn-clear').hidden = false;
+  if (previewUrl) { $('preview').src = previewUrl; $('preview').hidden = false; } else { $('preview').hidden = true; }
+  const text = info || (previewUrl ? '' : `${name} · ${fmtSize(blob.size)}`);
+  $('file-name').textContent = text; $('file-name').hidden = !text;
+}
+function onScanned({ blob, ext, preview, count }) {
+  setPending(blob, ext, 'Scan', { previewBlob: preview, info: `${count} page${count === 1 ? '' : 's'} · ${fmtSize(blob.size)}${ext === '.pdf' ? ' · PDF' : ''}` });
+  updateNamePreview();
+  if (!$('f-vendor').value) $('f-vendor').focus({ preventScroll: true });
 }
 
 async function saveReceipt() {
@@ -1007,6 +1019,7 @@ function wire() {
   $('in-camera').addEventListener('change', (e) => onPicked(e.target.files[0]));
   $('in-file').addEventListener('change', (e) => onPicked(e.target.files[0]));
   $('btn-clear').addEventListener('click', clearPending);
+  $('btn-scan').addEventListener('click', () => { Scanner.wire(); Scanner.open(onScanned); });
   for (const id of ['f-date', 'f-vendor', 'f-amount']) $(id).addEventListener('input', updateNamePreview);
   $('f-amount').addEventListener('blur', () => { const a = parseAmount($('f-amount').value); if (a) $('f-amount').value = a; updateNamePreview(); });
   $('btn-save').addEventListener('click', saveReceipt);

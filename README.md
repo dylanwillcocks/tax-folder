@@ -5,6 +5,7 @@ A phone app (a PWA) for the `Personal Documents/Tax/Tax27` folder in OneDrive.
 - **Position**: your FY27 tax position, read live from the `OVERVIEW` sheet of `PTR Calculations 27.xlsx`. Net income, income and deductions, an indicative tax estimate, a breakdown by income stream, deductions by section, key dates (including a flag when a share sale has no capital gain recorded), receipts filed, and how far through the year you are.
 - **To do + reminders** (on the Position tab): a checklist built from the year's dates (monthly receipt filing, quarterly updates for your accountant, the end-of-year sweep, lodgement, and a capital gain to work out when the workbook shows a sale with no gain recorded). Tick items off, and tap *Add reminders to my phone calendar* to get a 9 am alert on each due date.
 - **Files**: browse folders, search, open any file in OneDrive.
+- **Scan a document** (button at the top of Add receipt): take a photo of a page, and the app finds its edges (drag the orange corners if any are off), straightens it, and cleans it up (Original, Clean, or Black & white). Add as many pages as you like and save one PDF, or a single page as a JPEG. All of it happens on the phone. On an iPhone you can also use the built-in scanner: *Choose a photo or PDF*, then *Choose File*, then the `...` menu, then *Scan Documents*.
 - **Add receipt**: take a photo (or pick a photo/PDF), enter date, vendor and amount, and it is saved into `Receipts` (or any subfolder) as `2026-10-09 Bunnings $45.20.jpg`. Photos are shrunk to about 150 KB first.
 - **Your accountant**: save their name and email in Settings and the Position tab gets an "Email this summary" button. It opens a ready-written email in your mail app; nothing is sent until you press Send.
 - **Face ID lock** (Settings, the `...` button): asks for Face ID / fingerprint when you open the app or return after 2 minutes, and covers the screen in the app switcher.
@@ -17,6 +18,7 @@ It is plain HTML and JavaScript with no build step and no server. It signs in to
 |---|---|
 | `index.html` | Screens and styling |
 | `app.js` | Sign-in, OneDrive calls, workbook reader, tax estimate, receipt upload, lock |
+| `scan.js` | Document scanner: page finder, perspective fix, clean-up filters, PDF writer |
 | `xlsx.min.js` | SheetJS 0.18.5 (Apache-2.0), reads the workbook in the browser |
 | `sw.js` | Lets the app open with no signal |
 | `manifest.webmanifest`, `*.png` | Home-screen name and orange `$` icons |

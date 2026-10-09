@@ -1,7 +1,7 @@
 'use strict';
 // Network first, falling back to the cache so the shell still opens with no signal.
-const CACHE = 'taxfolder-v5';
-const SHELL = ['./', 'index.html', 'app.js', 'xlsx.min.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
+const CACHE = 'taxfolder-v6';
+const SHELL = ['./', 'index.html', 'app.js', 'scan.js', 'xlsx.min.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
