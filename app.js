@@ -9,7 +9,7 @@ const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'Files.ReadWrite offline_access';
 const DEFAULTS = { rootPath: 'Personal Documents/Tax/Tax27', receiptsFolder: 'Receipts', workbook: 'PTR Calculations 27.xlsx' };
 const LOCK_AFTER_MS = 2 * 60 * 1000;
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 const MAX_UPLOAD = 100 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
@@ -1046,6 +1046,18 @@ async function loadInbox() {
   updateInboxBadge();
   if (state.tab === 'inbox') renderInbox();
   if (state.tab === 'home') renderHome();
+  refreshPositionIfLogged();
+}
+// When the Mac has added receipts to the workbook since this phone last read it, fetch the workbook again so Position shows the new figures.
+async function refreshPositionIfLogged() {
+  const items = (state.inbox.data && state.inbox.data.items) || [];
+  const last = Math.max(0, ...items.filter((i) => i.logged && i.logged.sheet && !i.logged.duplicate).map((i) => Date.parse(i.loggedAt) || 0));
+  if (!last || !state.stack[0] || (state.position && state.position.at > last + 120000)) return;
+  try {
+    const items2 = await listChildren(state.stack[0].id);
+    state.rootItems = items2; state.rootFolders = items2.filter((i) => i.folder);
+    await refreshPosition();
+  } catch (e) { /* the next open tries again */ }
 }
 // Read the latest file, let `fn` change it, write it back (retrying once if the file changed underneath us).
 async function mutateInbox(fn) {
@@ -1125,6 +1137,22 @@ function editorFor(it) {
     }) }, 'Save my choice'));
 }
 
+// Where a decided receipt has got to: filed under Receipts, and added to the workbook or the capital-gains list.
+// The filing and logging are done on the Mac by Inbox/process_decisions.py, which stamps filedAt / loggedAt on the item.
+function processStatus(it) {
+  const d = it.decision || {}, lg = it.logged || {}, f = it.file || {};
+  const where = [(f.folder || '').replace(/\s*\/\s*/g, '/'), f.name].filter(Boolean).join('/');
+  const lines = [];
+  const filed = !!(it.filedAt || f.webUrl);
+  if (filed && f.name) lines.push(`Filed: ${where}`);
+  if (lg.sheet) lines.push(lg.duplicate ? `Already in the workbook (${lg.sheet}, row ${lg.row}), so I did not add it again.` : `Added to the workbook: ${lg.sheet}, row ${lg.row}.`);
+  else if (lg.csv) lines.push('Added to your capital gains costs list (cgt-costs.csv), not to the deductions.');
+  if (it.processNote && !it.loggedAt) lines.push(`Not in the workbook yet: ${it.processNote}.`);
+  else if (!filed) lines.push(d.treatment === 'claim' ? 'Waiting to be filed and added to the workbook.' : 'Waiting to be filed.');
+  else if (!it.loggedAt && (d.treatment === 'claim' || d.treatment === 'cgt')) lines.push(d.treatment === 'claim' ? 'Waiting to be added to the workbook.' : 'Waiting to be added to your capital gains list.');
+  return { lines, canUndo: !filed && !f.name };
+}
+
 function receiptCard(it, mode) {
   const g = it.suggestion || {}, saving = state.inbox.saving === it.id;
   const top = [
@@ -1135,12 +1163,13 @@ function receiptCard(it, mode) {
   const links = (it.viewUrl || docUrl) ? h('a', { class: 'chip', style: 'margin-top:8px', href: docUrl || it.viewUrl, target: '_blank', rel: 'noopener' }, docUrl ? 'Open the document ↗' : 'Open the email ↗') : null;
 
   if (mode === 'done') {
-    const d = it.decision || {};
+    const d = it.decision || {}, st = processStatus(it);
     return h('div', { class: 'rcpt' }, ...top,
       h('div', { style: 'margin-top:6px' }, h('span', { class: 'pill' + (d.treatment === 'claim' ? '' : ' warn') }, TREATMENTS[d.treatment] || 'Decided'), ' ',
         h('small', {}, [d.stream, d.category].filter(Boolean).join(' · '))),
       d.note ? h('p', { class: 'note', style: 'margin-top:4px' }, `Your note: ${d.note}`) : null,
-      h('div', { class: 'rcpt-actions' }, links, h('button', { class: 'chip', type: 'button', disabled: saving, onclick: () => decide(it.id, null) }, 'Undo')));
+      ...st.lines.map((l) => h('p', { class: 'note', style: 'margin-top:4px' }, l)),
+      h('div', { class: 'rcpt-actions' }, links, st.canUndo ? h('button', { class: 'chip', type: 'button', disabled: saving, onclick: () => decide(it.id, null) }, 'Undo') : null));
   }
   if (mode === 'notax') {
     return h('div', { class: 'rcpt' }, ...top,
