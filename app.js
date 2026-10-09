@@ -9,7 +9,7 @@ const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'Files.ReadWrite offline_access';
 const DEFAULTS = { rootPath: 'Personal Documents/Tax/Tax27', receiptsFolder: 'Receipts', workbook: 'PTR Calculations 27.xlsx' };
 const LOCK_AFTER_MS = 2 * 60 * 1000;
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 const MAX_UPLOAD = 100 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
@@ -523,7 +523,7 @@ function onScanned({ blob, ext, preview, count }) {
 }
 
 // Subfolders under Receipts, chosen by what the document turned out to be.
-const TREAT_FOLDER = { claim: '', xero: 'To Xero', cgt: 'Capital gains', reimbursed: 'Not claimable', personal: 'Not claimable', skip: 'Not claimable' };
+const TREAT_FOLDER = { claim: '', xero: 'Company costs', cgt: 'Capital gains', reimbursed: 'Not claimable', personal: 'Not claimable', skip: 'Not claimable' };
 async function ensureFolder(parentId, name) {
   try { const f = await graph(`/me/drive/items/${parentId}:/${encodeURIComponent(name)}`); if (f.folder) return f.id; }
   catch (e) { if (e.status !== 404) throw e; }
@@ -614,14 +614,14 @@ function buildExtractPrompt() {
     `You read one document (a receipt, tax invoice, bill, statement or letter) for Dylan's personal tax records and classify it. The financial year is 1 July ${fy - 1} to 30 June ${fy}. Today is ${new Date().toISOString().slice(0, 10)}.`,
     'Return ONLY the JSON object that matches the schema. Use null (or an empty string for stream and category) when something is not visible or you are not sure. Never invent amounts, dates or numbers.',
     'vendor = the business. date = the document date as YYYY-MM-DD (the invoice or transaction date, not a print date). total = what was paid or is payable in AUD including GST. gst = the GST amount if shown. payment = card brand and last four digits, PayPal, bank transfer and so on, if shown. description = one short line. ref = invoice, order, policy or assessment number. address = a property address if the document is about a property.',
-    'treatment: claim (a deduction in his personal return), xero (a business or company cost: anything paid on the business card, or clearly Oakwood business), reimbursed (already claimed back from Oakwood), personal (not claimable), cgt (a cost of buying, improving or selling a property that belongs in the capital gain), skip (not a receipt), unsure.',
+    'treatment: claim (a deduction in his personal return), xero (a company cost: anything paid on the business card or clearly Oakwood business; it is not part of his personal return and he does not use Xero himself, so never mention Xero), reimbursed (already claimed back from Oakwood), personal (not claimable), cgt (a cost of buying, improving or selling a property that belongs in the capital gain), skip (not a receipt), unsure.',
     `stream must be exactly one of: ${list(streams)}, or empty. category must be copied exactly from the lists below, or empty.`,
     'reason = one or two plain sentences. question = one specific question whose answer would change the treatment, or null if you are confident. Use his profile for his cards and standing rules: spend on the business card is xero, personal-card spend is personal, anything Oakwood reimbursed is not claimable, selling costs are cgt, utilities and rates are only deductible for a property that is rented or genuinely available for rent.',
     '', 'ABOUT DYLAN', state.ask.profile || '(no profile available)',
     '', 'CATEGORY LISTS (copy exactly)',
     `Personal return deductions: ${list(l && l.ptr)}`,
     `Investment property deductions: ${list(l && l.ip)}`,
-    `Company deductions (these go to Xero, not his return): ${list(l && l.ctr)}`,
+    `Company deductions (company costs, not his return): ${list(l && l.ctr)}`,
   ].join('\n');
 }
 async function extractDocument(blob) {
@@ -1014,7 +1014,7 @@ async function exportReminders() {
 /* ---------- inbox: receipts Claude found in Gmail, waiting for your say-so ---------- */
 const TREATMENTS = {
   claim: 'Claim it',
-  xero: 'Business (Xero)',
+  xero: 'Company cost (not my return)',
   reimbursed: 'Claimed back from Oakwood',
   personal: 'Personal, not claimable',
   cgt: 'Part of the capital gain',
@@ -1248,7 +1248,7 @@ function buildSystemPrompt() {
     '1. Start with a verdict in bold, one of: "Likely claimable", "Probably not claimable", "It depends", "Not yours to claim (it belongs to the business or a trust)", "Part of the capital gain, not a deduction", or "Not tax related".',
     '2. Then two to five short bullets or sentences: the rule that decides it, applied to HIS situation, naming the income stream, card, property or entity involved.',
     '3. Then "To be sure:" with one to three specific questions whose answers would change the verdict.',
-    '4. Then "Keep:" the record to keep, and "Log it:" where it goes in his workbook (income stream and category), or Xero when it is a business-card or company cost.',
+    '4. Then "Keep:" the record to keep, and "Log it:" where it goes in his workbook (income stream and category), or say it is a company cost when it is a business-card or company expense (he does not use Xero, so never mention it).',
     'Keep answers under about 250 words unless he asks for more. Never invent figures: use only numbers in the data below or that he gives you. If a rate, threshold or rule for the current year is not in the data below and you are not sure of it, say so and say what to check. If a question needs a fact you do not have, ask for it instead of assuming.',
     '',
     'ABOUT DYLAN (his profile, written by him and Claude; trust it over guesses)',

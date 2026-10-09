@@ -1,7 +1,7 @@
 'use strict';
 // Network first (always revalidated, so the page and its scripts can never be a mix of old and new),
 // falling back to the cache so the app still opens with no signal.
-const CACHE = 'taxfolder-v9';
+const CACHE = 'taxfolder-v10';
 const SHELL = ['./', 'index.html', 'app.js', 'scan.js', 'xlsx.min.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
