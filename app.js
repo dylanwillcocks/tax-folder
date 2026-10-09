@@ -9,6 +9,7 @@ const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'Files.ReadWrite offline_access';
 const DEFAULTS = { rootPath: 'Personal Documents/Tax/Tax27', receiptsFolder: 'Receipts', workbook: 'PTR Calculations 27.xlsx' };
 const LOCK_AFTER_MS = 2 * 60 * 1000;
+const APP_VERSION = '8';
 const MAX_UPLOAD = 100 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
@@ -25,6 +26,8 @@ const cfg = () => ({
   rootPath: (ls.get('rootPath') || DEFAULTS.rootPath).replace(/^\/+|\/+$/g, ''),
   receiptsFolder: ls.get('receiptsFolder') || DEFAULTS.receiptsFolder,
   workbook: ls.get('workbook') || DEFAULTS.workbook,
+  inboxFolder: ls.get('inboxFolder') || 'Inbox',
+  apiKey: ls.get('apiKey') || '',
   accountantName: ls.get('accountantName') || 'Brayden',
   accountantEmail: ls.get('accountantEmail') || '',
   clientId: ls.get('clientId') || '',
@@ -176,9 +179,9 @@ const current = () => state.stack[state.stack.length - 1];
 /* ---------- views ---------- */
 function show(name) {
   state.tab = name;
-  for (const v of ['setup', 'signin', 'home', 'files', 'add']) $('view-' + v).hidden = v !== name;
-  $('nav').hidden = !['home', 'files', 'add'].includes(name);
-  for (const t of ['home', 'files', 'add']) {
+  for (const v of ['setup', 'signin', 'home', 'inbox', 'ask', 'files', 'add']) $('view-' + v).hidden = v !== name;
+  $('nav').hidden = !['home', 'inbox', 'ask', 'files', 'add'].includes(name);
+  for (const t of ['home', 'inbox', 'ask', 'files', 'add']) {
     const b = $('tab-' + t);
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   }
@@ -187,6 +190,8 @@ function show(name) {
   $('logo').hidden = showUp;
   $('title').textContent = name === 'files' && current() ? current().name
     : name === 'add' ? 'Add receipt'
+    : name === 'inbox' ? 'Inbox'
+    : name === 'ask' ? 'Ask'
     : name === 'home' ? `FY${fyEnd() % 100} tax position` : 'Tax Folder';
   window.scrollTo(0, 0);
 }
@@ -321,6 +326,7 @@ async function openRoot() {
     await loadFolder();
     renderHome();
     refreshPosition();
+    loadInbox();
   } catch (e) {
     if (e instanceof AuthError) return needSignIn();
     state.stack = [];
@@ -515,6 +521,7 @@ function parseOverview(rows) {
   });
   let section = null;
   const items = [], dates = [];
+  const labels = { income: [], ptr: [], ctr: [], ip: [], other: [] };
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const label = String(row[0] == null ? '' : row[0]).trim();
@@ -527,6 +534,7 @@ function parseOverview(rows) {
       continue;
     }
     if (!section) continue;
+    if (labels[section] && !/:\s*$/.test(label)) labels[section].push(label);
     const amounts = streams.map((s) => num(row[s.idx]));
     let total = totalIdx > 0 ? num(row[totalIdx]) : 0;
     if (!total) total = amounts.reduce((a, b) => a + b, 0);
@@ -537,7 +545,7 @@ function parseOverview(rows) {
   const income = sum(['income']), deductions = sum(DEDUCTION_SECTIONS);
   return {
     streams: streams.map((s, i) => ({ name: s.name, income: sum(['income'], i), deductions: sum(DEDUCTION_SECTIONS, i) })),
-    items, dates, income, deductions, other: sum(['other']), net: income - deductions,
+    items, dates, labels, income, deductions, other: sum(['other']), net: income - deductions,
   };
 }
 
@@ -580,7 +588,7 @@ async function refreshPosition(force = false) {
   const item = findWorkbook();
   if (!item) { state.position = null; state.positionError = `Couldn't find "${cfg().workbook}" in ${state.stack[0] ? state.stack[0].name : 'the folder'}.`; renderHome(); return; }
   const snap = state.position;
-  if (!force && snap && snap.id === item.id && snap.modified === item.lastModifiedDateTime && snap.data) { state.positionError = ''; renderHome(); return; }
+  if (!force && snap && snap.id === item.id && snap.modified === item.lastModifiedDateTime && snap.data && snap.data.labels) { state.positionError = ''; renderHome(); return; }
   state.positionBusy = true; state.positionError = ''; renderHome();
   try {
     const data = await parseWorkbook(await downloadItem(item));
@@ -760,6 +768,435 @@ async function exportReminders() {
   toast(`${ics.count} reminders ready. Open the file to add them to your calendar.`);
 }
 
+
+/* ---------- inbox: receipts Claude found in Gmail, waiting for your say-so ---------- */
+const TREATMENTS = {
+  claim: 'Claim it',
+  xero: 'Business (Xero)',
+  reimbursed: 'Claimed back from Oakwood',
+  personal: 'Personal, not claimable',
+  cgt: 'Part of the capital gain',
+  skip: 'Not a receipt',
+};
+const FALLBACK_CATEGORIES = ['Cost of Managing Tax Affairs', 'Council Rates', 'Insurance: Landlord Insurance', 'Interest on Loans', 'Repairs and Maintenance: General Repairs', 'Water Charges', 'Other Work-Related Expenses', 'Home Office Expenses', 'Gifts or Donations'];
+state.inbox = { data: null, error: '', busy: false, saving: '', filter: 'review', open: null };
+
+const inboxFolder = () => state.rootItems.find((i) => i.folder && i.name.toLowerCase() === cfg().inboxFolder.toLowerCase());
+const fmtYmd = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : ''; };
+const inboxPending = (d) => ((d && d.items) || []).filter((i) => i.status === 'pending' && i.relevance !== 'no');
+
+async function fetchInbox() {
+  const f = inboxFolder();
+  if (!f) return { folderId: '', data: null, etag: '' };
+  let meta;
+  try { meta = await graph(`/me/drive/items/${f.id}:/inbox.json`); }
+  catch (e) { if (e.status === 404) return { folderId: f.id, data: null, etag: '' }; throw e; }
+  const buf = await downloadItem(meta);
+  return { folderId: f.id, data: JSON.parse(new TextDecoder().decode(buf)), etag: meta.eTag || '' };
+}
+async function loadInbox() {
+  const ib = state.inbox;
+  ib.busy = true; ib.error = '';
+  if (state.tab === 'inbox') renderInbox();
+  try { const r = await fetchInbox(); ib.data = r.data; }
+  catch (e) { if (e instanceof AuthError) { ib.busy = false; return needSignIn(); } ib.error = friendly(e); }
+  ib.busy = false;
+  updateInboxBadge();
+  if (state.tab === 'inbox') renderInbox();
+  if (state.tab === 'home') renderHome();
+}
+// Read the latest file, change one receipt, write it back (retrying once if the file changed underneath us).
+async function updateItem(id, change) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetchInbox();
+    if (!r.data) throw new Error('The inbox file is missing.');
+    const it = r.data.items.find((x) => x.id === id);
+    if (!it) throw new Error('That receipt is no longer in the inbox.');
+    change(it);
+    r.data.updated = new Date().toISOString();
+    try {
+      await graph(`/me/drive/items/${r.folderId}:/inbox.json:/content`, {
+        method: 'PUT', body: JSON.stringify(r.data, null, 2),
+        headers: { 'Content-Type': 'application/json', ...(r.etag ? { 'If-Match': r.etag } : {}) },
+      });
+      state.inbox.data = r.data;
+      return;
+    } catch (e) { if (e.status !== 412 || attempt) throw e; }
+  }
+}
+async function decide(id, decision) {
+  const ib = state.inbox; ib.saving = id; renderInbox();
+  try {
+    await updateItem(id, (it) => {
+      if (decision) { it.decision = { ...decision, at: new Date().toISOString() }; it.status = 'decided'; }
+      else { delete it.decision; it.status = 'pending'; }
+    });
+    ib.open = null; updateInboxBadge();
+    toast(decision ? `Saved: ${TREATMENTS[decision.treatment]}` : 'Moved back to review');
+  } catch (e) { if (e instanceof AuthError) { ib.saving = ''; return needSignIn(); } banner(friendly(e)); }
+  ib.saving = ''; renderInbox();
+}
+async function bringBack(id) {
+  state.inbox.saving = id; renderInbox();
+  try { await updateItem(id, (it) => { it.relevance = 'maybe'; }); updateInboxBadge(); }
+  catch (e) { if (e instanceof AuthError) { state.inbox.saving = ''; return needSignIn(); } banner(friendly(e)); }
+  state.inbox.saving = ''; renderInbox();
+}
+function updateInboxBadge() {
+  const n = inboxPending(state.inbox.data).length, b = $('inbox-badge');
+  b.textContent = String(n); b.hidden = !n;
+}
+
+function categoryOptions() {
+  const l = state.position && state.position.data && state.position.data.labels;
+  const fromSheet = l ? [...l.ptr, ...l.ip].map(shortLabel) : [];
+  return [...new Set([...fromSheet, ...FALLBACK_CATEGORIES])];
+}
+function streamOptions() {
+  const d = state.position && state.position.data;
+  return d ? d.streams.map((x) => streamLabel(x.name).main) : [];
+}
+function guessLine(g) {
+  return [TREATMENTS[g.treatment] || 'Not sure', g.stream, g.category].filter(Boolean).join(' · ');
+}
+
+function editorFor(it) {
+  const dec = it.decision || it.suggestion || {};
+  const tSel = h('select', { id: 'ed-treatment', 'aria-label': 'What to do with it' }, ...Object.entries(TREATMENTS).map(([k, v]) => h('option', { value: k }, v)));
+  tSel.value = dec.treatment || 'claim';
+  const sSel = h('select', { id: 'ed-stream', 'aria-label': 'Which income stream' }, h('option', { value: '' }, 'Not sure which stream'), ...streamOptions().map((n) => h('option', { value: n }, n)));
+  sSel.value = dec.stream || '';
+  const dl = h('datalist', { id: 'ed-cats' }, ...categoryOptions().map((c) => h('option', { value: c })));
+  const cat = h('input', { type: 'text', id: 'ed-category', list: 'ed-cats', placeholder: 'Category, e.g. Council Rates', autocomplete: 'off', value: dec.category || '' });
+  return h('div', { class: 'stack', style: 'margin-top:10px' },
+    h('label', { class: 'field' }, 'What should happen to it?', tSel),
+    h('label', { class: 'field' }, 'Income stream', sSel),
+    h('label', { class: 'field' }, 'Category', cat, dl),
+    h('button', { class: 'btn primary block', type: 'button', onclick: () => decide(it.id, {
+      treatment: tSel.value, stream: sSel.value, category: cat.value.trim(), note: ($(`note-${it.id}`) || {}).value || '',
+    }) }, 'Save my choice'));
+}
+
+function receiptCard(it, mode) {
+  const g = it.suggestion || {}, saving = state.inbox.saving === it.id;
+  const top = [
+    h('div', { class: 'stream-head' }, h('span', { class: 'stream-name' }, it.vendor || it.from || 'Unknown sender'), h('b', {}, it.amount != null ? money(it.amount, true) : '—')),
+    h('small', { style: 'display:block;color:var(--muted);font-size:13px' }, [fmtYmd(it.date), it.docType, it.description].filter(Boolean).join(' · ')),
+  ];
+  const links = it.viewUrl ? h('a', { class: 'chip', style: 'margin-top:8px', href: it.viewUrl, target: '_blank', rel: 'noopener' }, 'Open the email ↗') : null;
+
+  if (mode === 'done') {
+    const d = it.decision || {};
+    return h('div', { class: 'rcpt' }, ...top,
+      h('div', { style: 'margin-top:6px' }, h('span', { class: 'pill' + (d.treatment === 'claim' ? '' : ' warn') }, TREATMENTS[d.treatment] || 'Decided'), ' ',
+        h('small', {}, [d.stream, d.category].filter(Boolean).join(' · '))),
+      d.note ? h('p', { class: 'note', style: 'margin-top:4px' }, `Your note: ${d.note}`) : null,
+      h('div', { class: 'rcpt-actions' }, links, h('button', { class: 'chip', type: 'button', disabled: saving, onclick: () => decide(it.id, null) }, 'Undo')));
+  }
+  if (mode === 'notax') {
+    return h('div', { class: 'rcpt' }, ...top,
+      g.reason ? h('p', { class: 'note', style: 'margin-top:4px' }, g.reason) : null,
+      h('div', { class: 'rcpt-actions' }, links,
+        h('button', { class: 'chip', type: 'button', disabled: saving, onclick: () => bringBack(it.id) }, 'Actually, review this'),
+        h('button', { class: 'chip', type: 'button', disabled: saving, onclick: () => decide(it.id, { treatment: 'skip', stream: '', category: '', note: '' }) }, 'Confirm: not tax')));
+  }
+  const open = state.inbox.open === it.id;
+  const note = h('input', { type: 'text', id: `note-${it.id}`, placeholder: g.question ? 'Your answer or a note (optional)' : 'A note (optional)', autocomplete: 'off' });
+  const ask = g.question ? h('p', { class: 'ask' }, h('b', {}, 'Question: '), g.question) : null;
+  return h('div', { class: 'rcpt' }, ...top,
+    h('div', { class: 'guess' },
+      h('div', { class: 'eyebrow2' }, `My guess${g.confidence ? ` · ${g.confidence} confidence` : ''}`),
+      h('b', {}, guessLine(g)),
+      g.reason ? h('p', { class: 'note', style: 'margin-top:4px' }, g.reason) : null,
+      ask),
+    note,
+    h('div', { class: 'rcpt-actions' },
+      g.treatment ? h('button', { class: 'btn primary', type: 'button', disabled: saving, onclick: () => decide(it.id, { treatment: g.treatment, stream: g.stream || '', category: g.category || '', note: note.value }) }, saving ? 'Saving…' : "Yes, that's right") : null,
+      h('button', { class: 'btn', type: 'button', disabled: saving, onclick: () => { state.inbox.open = open ? null : it.id; renderInbox(); } }, open ? 'Close' : 'Something else')),
+    open ? editorFor(it) : null,
+    links ? h('div', {}, links) : null);
+}
+
+function renderInbox() {
+  const box = $('inbox'), ib = state.inbox;
+  const keepFocus = document.activeElement && document.activeElement.id;
+  box.replaceChildren();
+  if (ib.busy && !ib.data) { box.append(h('div', { class: 'state' }, h('div', { class: 'spinner' }), 'Opening your inbox…')); return; }
+  if (ib.error && !ib.data) { box.append(card(h('b', {}, "Couldn't open the inbox"), h('p', { class: 'muted' }, ib.error), h('button', { class: 'btn block', type: 'button', style: 'margin-top:10px', onclick: loadInbox }, 'Try again'))); return; }
+  if (!ib.data) {
+    box.append(card(h('b', {}, 'Nothing here yet'),
+      h('p', { class: 'muted', style: 'margin-top:6px' }, 'When Claude scans your Gmail for receipts they land here, each with a guess at what it is for and a question where it is not obvious. Ask Claude to "sync my Gmail receipts".')));
+    return;
+  }
+  const items = [...(ib.data.items || [])].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const review = items.filter((i) => i.status === 'pending' && i.relevance !== 'no');
+  const done = items.filter((i) => i.status === 'decided');
+  const notax = items.filter((i) => i.status === 'pending' && i.relevance === 'no');
+  const f = ib.filter;
+  box.append(h('div', { class: 'hero' },
+    h('div', { class: 'eyebrow' }, 'Receipts from Gmail'),
+    h('div', { class: 'big' }, `${review.length} to review`),
+    h('div', { class: 'sub' }, ib.data.updated ? `Last scanned ${fmtYmd(ib.data.syncedThrough || ib.data.updated)} · ${items.length} found this year` : `${items.length} found this year`)));
+  box.append(h('div', { class: 'chips', style: 'margin:0' },
+    ...[['review', `To review (${review.length})`], ['done', `Done (${done.length})`], ['notax', `Probably not tax (${notax.length})`]]
+      .map(([k, label]) => h('button', { class: 'chip', type: 'button', 'aria-pressed': String(f === k), onclick: () => { ib.filter = k; ib.open = null; renderInbox(); } }, label)),
+    h('button', { class: 'chip', type: 'button', onclick: loadInbox }, ib.busy ? 'Refreshing…' : 'Refresh')));
+  const list = f === 'done' ? done : f === 'notax' ? notax : review;
+  if (!list.length) {
+    box.append(h('div', { class: 'state' }, f === 'review' ? 'All caught up. Nothing waiting for you.' : 'Nothing here.'));
+  } else {
+    const wrap = card();
+    for (const it of list) wrap.append(receiptCard(it, f));
+    box.append(wrap);
+  }
+  if (keepFocus) { const el = document.getElementById(keepFocus); if (el) el.focus(); }
+}
+
+function renderInboxPrompt(box) {
+  const n = inboxPending(state.inbox.data).length;
+  if (!n) return;
+  box.append(h('button', { class: 'btn orange block', type: 'button', onclick: () => $('tab-inbox').click() }, `${n} receipt${n === 1 ? '' : 's'} from Gmail to review`));
+}
+
+
+/* ---------- ask: questions answered by Claude, who knows your setup ---------- */
+const ASK_MODEL = 'claude-opus-5-5';
+const ASK_API = 'https://api.anthropic.com/v1/messages';
+state.ask = { thread: ls.get('askThread', []), busy: false, view: 'chat', briefing: null, profile: '', loaded: false };
+
+async function readInboxFile(name) {
+  const f = inboxFolder();
+  if (!f) return null;
+  let meta;
+  try { meta = await graph(`/me/drive/items/${f.id}:/${encodeURIComponent(name)}`); }
+  catch (e) { if (e.status === 404) return { folderId: f.id, text: null, etag: '' }; throw e; }
+  return { folderId: f.id, text: new TextDecoder().decode(await downloadItem(meta)), etag: meta.eTag || '' };
+}
+async function loadAskContext() {
+  const a = state.ask;
+  try {
+    const [p, b] = await Promise.all([readInboxFile('profile.md'), readInboxFile('briefing.json')]);
+    a.profile = (p && p.text) || '';
+    a.briefing = b && b.text ? JSON.parse(b.text) : null;
+    a.loaded = true;
+  } catch (e) { if (e instanceof AuthError) return needSignIn(); }
+  syncQueue();
+  if (state.tab === 'ask') renderAsk();
+}
+
+const persistAsk = () => ls.set('askThread', state.ask.thread.slice(-30));
+const isoNow = () => new Date().toISOString();
+
+// ----- the system prompt: generic rules in code, everything personal comes from your OneDrive at question time -----
+function buildSystemPrompt() {
+  const a = state.ask, p = state.position, d = p && p.data, fy = fyEnd();
+  const today = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const lines = [
+    `You are the personal tax assistant inside Dylan's tax app. Today is ${today}. The current Australian financial year is 1 July ${fy - 1} to 30 June ${fy}. Address Dylan as "you". Be direct, warm and plain-English, with Australian spelling.`,
+    `You are not a registered tax agent. You give general information and a reasoned view on his own situation. Say so in a few words when it matters, and point to ${cfg().accountantName} (his accountant) for anything material or uncertain. Never pretend to certainty.`,
+    '',
+    'HOW TO ANSWER',
+    '1. Start with a verdict in bold, one of: "Likely claimable", "Probably not claimable", "It depends", "Not yours to claim (it belongs to the business or a trust)", "Part of the capital gain, not a deduction", or "Not tax related".',
+    '2. Then two to five short bullets or sentences: the rule that decides it, applied to HIS situation, naming the income stream, card, property or entity involved.',
+    '3. Then "To be sure:" with one to three specific questions whose answers would change the verdict.',
+    '4. Then "Keep:" the record to keep, and "Log it:" where it goes in his workbook (income stream and category), or Xero when it is a business-card or company cost.',
+    'Keep answers under about 250 words unless he asks for more. Never invent figures: use only numbers in the data below or that he gives you. If a rate, threshold or rule for the current year is not in the data below and you are not sure of it, say so and say what to check. If a question needs a fact you do not have, ask for it instead of assuming.',
+    '',
+    'ABOUT DYLAN (his profile, written by him and Claude; trust it over guesses)',
+    a.profile || '(No profile file found. Ask him a short question about his structure before answering anything that depends on it.)',
+  ];
+  if (d) {
+    lines.push('', `HIS NUMBERS FROM THE WORKBOOK ${p.name} (read ${new Date(p.at).toLocaleDateString('en-AU')})`,
+      `Income recorded ${money(d.income, true)}, deductions recorded ${money(d.deductions, true)}, net ${money(d.net, true)}.`);
+    for (const s of d.streams.filter((x) => x.income || x.deductions)) lines.push(`- ${streamLabel(s.name).main}: income ${money(s.income, true)}, deductions ${money(s.deductions, true)}`);
+    for (const it of d.items.filter((x) => DEDUCTION_SECTIONS.includes(x.section))) lines.push(`- Deduction: ${shortLabel(it.label)} ${money(it.total, true)}`);
+    for (const x of d.dates) lines.push(`- Key date: ${new Date(x.date).toISOString().slice(0, 10)} ${x.label}`);
+    const est = estimateTax(d.net, fy);
+    lines.push(`Indicative tax on that net income if all taxed to him personally: ${money(est.total, true)} including Medicare (marginal rate ${pct(est.marginal)}). Trust distributions and offsets are not included.`);
+  }
+  const inbox = state.inbox.data;
+  if (inbox && inbox.items) {
+    const decided = inbox.items.filter((i) => i.status === 'decided');
+    const open = inboxPending(inbox).length;
+    lines.push('', `RECEIPT DECISIONS SO FAR (${decided.length} decided, ${open} waiting for his answer)`);
+    for (const i of decided.slice(0, 40)) {
+      const dec = i.decision || {};
+      lines.push(`- ${i.date} ${i.vendor} ${i.amount != null ? money(i.amount, true) : ''}: ${TREATMENTS[dec.treatment] || dec.treatment}${dec.category ? ', ' + dec.category : ''}${dec.stream ? ' (' + dec.stream + ')' : ''}${dec.note ? '. His note: ' + dec.note : ''}`);
+    }
+  }
+  const b = a.briefing;
+  if (b && b.items && b.items.length) {
+    lines.push('', `CURRENT TAX NEWS, CHECKED ${b.generated || ''} (use these for current-year rules; each item has its status)`);
+    for (const it of b.items) lines.push(`- [${it.status}] ${it.topic}: ${it.headline}${it.effective ? ' (' + it.effective + ')' : ''}. ${it.what || ''}`);
+  }
+  return lines.join('\n');
+}
+
+// the API wants strictly alternating turns that start with the user
+function apiMessages() {
+  const out = [];
+  for (const m of state.ask.thread.slice(-14)) {
+    if (m.error || m.pending || !m.text) continue;
+    const last = out[out.length - 1];
+    if (last && last.role === m.role) last.content += '\n\n' + m.text; else out.push({ role: m.role, content: m.text });
+  }
+  while (out.length && out[0].role !== 'user') out.shift();
+  return out;
+}
+
+async function postClaude(body, withFallback) {
+  const headers = { 'content-type': 'application/json', 'x-api-key': cfg().apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
+  let payload = body;
+  if (withFallback) { headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; payload = { ...body, fallbacks: 'default' }; }
+  const res = await fetch(ASK_API, { method: 'POST', headers, body: JSON.stringify(payload) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = new Error((data.error && data.error.message) || `Claude returned ${res.status}`);
+    e.status = res.status; throw e;
+  }
+  return data;
+}
+async function callClaude() {
+  const body = { model: ASK_MODEL, max_tokens: 8000, system: buildSystemPrompt(), messages: apiMessages() };
+  let data;
+  try { data = await postClaude(body, true); }
+  catch (e) { if (e.status === 400) data = await postClaude(body, false); else throw e; }   // if the fallback option is not accepted, ask plainly
+  if (data.stop_reason === 'refusal') throw new Error("Claude wouldn't answer that one. Try rewording the question.");
+  const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n\n').trim();
+  if (!text) throw new Error('Claude sent back an empty answer. Try again.');
+  return text;
+}
+function askErrorText(e) {
+  if (e instanceof TypeError) return 'No connection. Check your signal and try again.';
+  if (e.status === 401) return 'Claude rejected the API key. Check it in Settings (the ⋯ button).';
+  if (e.status === 403) return 'That API key is not allowed to use this model. Check the key in the Claude Console.';
+  if (e.status === 429) return 'Claude is busy or the key has hit a limit. Try again in a minute.';
+  if (e.status === 402 || /credit|balance|billing/i.test(e.message || '')) return 'The Claude account is out of credit. Add credit in the Claude Console.';
+  return e.message || 'Something went wrong.';
+}
+
+// ----- no API key: leave the question in your OneDrive for Claude to answer next time it runs -----
+async function updateQuestions(change) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await readInboxFile('questions.json');
+    if (!r) throw new Error('The Inbox folder is missing in OneDrive.');
+    const data = r.text ? JSON.parse(r.text) : { version: 1, items: [] };
+    change(data);
+    try {
+      await graph(`/me/drive/items/${r.folderId}:/questions.json:/content`, { method: 'PUT', body: JSON.stringify(data, null, 2), headers: { 'Content-Type': 'application/json', ...(r.etag ? { 'If-Match': r.etag } : {}) } });
+      return data;
+    } catch (e) { if (e.status !== 412 || attempt) throw e; }
+  }
+}
+async function queueQuestion(text) {
+  const qid = 'q' + Date.now().toString(36);
+  await updateQuestions((d) => d.items.push({ id: qid, at: isoNow(), q: text, status: 'open', answer: null }));
+  return qid;
+}
+async function syncQueue() {
+  const a = state.ask;
+  if (!a.thread.some((m) => m.pending)) return;
+  try {
+    const r = await readInboxFile('questions.json');
+    if (!r || !r.text) return;
+    const items = JSON.parse(r.text).items || [];
+    let changed = false;
+    for (const m of a.thread) {
+      if (!m.pending) continue;
+      const it = items.find((x) => x.id === m.qid);
+      if (it && it.answer) { m.pending = false; m.text = it.answer; m.at = Date.now(); changed = true; }
+    }
+    if (changed) { persistAsk(); if (state.tab === 'ask') renderAsk(); }
+  } catch (e) { /* try again next time */ }
+}
+
+async function sendQuestion(text) {
+  const a = state.ask;
+  text = (text || '').trim();
+  if (!text || a.busy) return;
+  a.thread.push({ role: 'user', text, at: Date.now() });
+  a.view = 'chat'; a.busy = true; persistAsk(); renderAsk();
+  try {
+    if (cfg().apiKey) a.thread.push({ role: 'assistant', text: await callClaude(), at: Date.now() });
+    else a.thread.push({ role: 'assistant', pending: true, qid: await queueQuestion(text), text: '', at: Date.now() });
+  } catch (e) {
+    if (e instanceof AuthError) { a.busy = false; return needSignIn(); }
+    a.thread.push({ role: 'assistant', error: true, text: askErrorText(e), at: Date.now() });
+  }
+  a.busy = false; persistAsk(); renderAsk();
+  const box = $('ask'); if (box && box.lastElementChild) box.lastElementChild.scrollIntoView({ block: 'nearest' });
+}
+function askAbout(q) {
+  state.ask.view = 'chat'; renderAsk();
+  const input = $('ask-input'); input.value = q; input.focus();
+}
+
+// ----- display -----
+function inlineFmt(s) {
+  return s.split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((p) => (/^\*\*[^*]+\*\*$/.test(p) ? h('b', {}, p.slice(2, -2)) : p));
+}
+function formatAnswer(text) {
+  const nodes = []; let list = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) { list = null; continue; }
+    const m = /^[-•*]\s+(.*)$/.exec(line);
+    if (m) { if (!list) { list = h('ul', { class: 'ans-list' }); nodes.push(list); } list.append(h('li', {}, ...inlineFmt(m[1]))); }
+    else { list = null; nodes.push(h('p', { class: 'ans-p' }, ...inlineFmt(line.replace(/^#+\s*/, '')))); }
+  }
+  return nodes;
+}
+const GENERIC_SUGGESTIONS = ['Can I claim my phone and internet?', 'Can I claim a meal with a client?', 'Can I claim a new fridge for a rental?'];
+
+function renderAsk() {
+  const box = $('ask'), a = state.ask;
+  box.replaceChildren();
+  const nBrief = a.briefing && a.briefing.items ? a.briefing.items.length : 0;
+  box.append(h('div', { class: 'chips', style: 'margin:0' },
+    h('button', { class: 'chip', type: 'button', 'aria-pressed': String(a.view === 'chat'), onclick: () => { a.view = 'chat'; renderAsk(); } }, 'Ask Claude'),
+    h('button', { class: 'chip', type: 'button', 'aria-pressed': String(a.view === 'briefing'), onclick: () => { a.view = 'briefing'; renderAsk(); } }, `For you${nBrief ? ` (${nBrief})` : ''}`)));
+  $('ask-form').hidden = a.view !== 'chat';
+  if (a.view === 'briefing') { renderBriefing(box); return; }
+
+  if (!a.thread.length) {
+    const sugg = [...new Set([...(a.briefing && a.briefing.items ? a.briefing.items.flatMap((i) => (i.questions || []).slice(0, 1)) : []).slice(0, 3), ...GENERIC_SUGGESTIONS])].slice(0, 4);
+    box.append(card(
+      h('b', {}, 'Ask whether you can claim something'),
+      h('p', { class: 'muted', style: 'margin:6px 0 10px' }, cfg().apiKey
+        ? 'Claude knows your setup from your profile, your workbook and your receipt decisions. Answers are general information, not tax advice. Anything material goes to your accountant.'
+        : 'No API key yet, so questions are saved for Claude to answer the next time you open it on your Mac. Add an API key in Settings for instant answers. Your questions and tax figures are sent to Claude to answer.'),
+      h('div', { class: 'qchips' }, ...sugg.map((q) => h('button', { class: 'qchip', type: 'button', onclick: () => askAbout(q) }, q)))));
+  }
+  for (const m of a.thread) {
+    if (m.role === 'user') box.append(h('div', { class: 'bubble me' }, m.text));
+    else if (m.pending) box.append(h('div', { class: 'bubble ai wait' }, 'Saved for Claude. The answer appears here once Claude has looked at it.', h('button', { class: 'chip', type: 'button', style: 'margin-left:8px', onclick: syncQueue }, 'Check now')));
+    else if (m.error) box.append(h('div', { class: 'bubble ai err' }, m.text));
+    else box.append(h('div', { class: 'bubble ai' }, h('div', { class: 'who' }, 'Claude'), ...formatAnswer(m.text)));
+  }
+  if (a.busy) box.append(h('div', { class: 'bubble ai wait' }, h('div', { class: 'spinner', style: 'margin:0 8px 0 0;display:inline-block;vertical-align:middle' }), 'Thinking…'));
+  $('ask-send').disabled = a.busy;
+}
+
+function renderBriefing(box) {
+  const b = state.ask.briefing;
+  if (!b || !b.items || !b.items.length) {
+    box.append(card(h('b', {}, 'No briefing yet'), h('p', { class: 'muted', style: 'margin-top:6px' }, 'Claude writes this from the latest Budget, ATO and Queensland announcements, matched to your setup. Ask Claude to "update my tax briefing".')));
+    return;
+  }
+  box.append(h('p', { class: 'note', style: 'padding:0 4px' }, `Checked ${fmtYmd(b.generated)}. Each card links to its source. Tap a question to ask Claude about it.`));
+  for (const it of b.items) {
+    const firm = /in effect|legislated/i.test(it.status || '');
+    box.append(card(
+      h('div', { class: 'stream-head' }, h('span', { class: 'eyebrow2' }, it.topic), h('span', { class: 'pill' + (firm ? '' : ' warn') }, it.status || '')),
+      h('b', { style: 'display:block;margin:4px 0' }, it.headline),
+      it.effective ? h('small', { style: 'display:block;color:var(--muted)' }, it.effective) : null,
+      h('p', { class: 'muted', style: 'font-size:14px;margin:6px 0' }, it.what || ''),
+      it.you ? h('div', { class: 'guess' }, h('div', { class: 'eyebrow2' }, 'How it could affect you'), h('p', { style: 'margin:0' }, it.you)) : null,
+      it.questions && it.questions.length ? h('div', { class: 'qchips' }, ...it.questions.map((q) => h('button', { class: 'qchip', type: 'button', onclick: () => askAbout(q) }, q))) : null,
+      it.source && it.source.url ? h('a', { class: 'chip', style: 'margin-top:8px', href: it.source.url, target: '_blank', rel: 'noopener' }, `${it.source.title || 'Source'} ↗`) : null));
+  }
+}
+
 /* ---------- home screen ---------- */
 const aud0 = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
 const aud2 = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
@@ -823,6 +1260,7 @@ function renderHome() {
     h('div', { class: 'tile in' }, h('small', {}, 'Income'), h('b', {}, money(d.income))),
     h('div', { class: 'tile' }, h('small', {}, 'Deductions'), h('b', {}, money(d.deductions)))));
 
+  renderInboxPrompt(box);
   renderTasks(box);
 
   /* indicative tax */
@@ -985,11 +1423,12 @@ function openSettings() {
   $('s-root').value = c.rootPath; $('s-receipts').value = c.receiptsFolder; $('s-client').value = c.clientId;
   $('s-redirect').textContent = redirectUri();
   $('s-workbook').value = c.workbook;
+  $('s-apikey').value = c.apiKey; $('s-version').textContent = APP_VERSION;
   $('s-acc-name').value = c.accountantName; $('s-acc-email').value = c.accountantEmail;
   renderLockRow();
   $('settings').showModal();
 }
-function signOut() { for (const k of ['tokens', 'pkce', 'lock', 'snapshot']) ls.del(k); location.replace(redirectUri()); }
+function signOut() { for (const k of ['tokens', 'pkce', 'lock', 'snapshot', 'apiKey', 'askThread']) ls.del(k); location.replace(redirectUri()); }
 
 /* ---------- wire up ---------- */
 function wire() {
@@ -1013,13 +1452,28 @@ function wire() {
     show('home'); renderHome();
     if (state.dirty && state.stack.length) { await refreshRootItems(); renderHome(); }
   });
+  $('tab-inbox').addEventListener('click', () => { show('inbox'); renderInbox(); loadInbox(); });
+  $('tab-ask').addEventListener('click', () => { show('ask'); renderAsk(); loadAskContext(); });
+  $('ask-form').addEventListener('submit', (e) => { e.preventDefault(); const i = $('ask-input'); const t = i.value; i.value = ''; i.style.height = ''; sendQuestion(t); });
+  $('ask-input').addEventListener('input', (e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(140, e.target.scrollHeight) + 'px'; });
   $('tab-files').addEventListener('click', () => { show('files'); if (state.dirty && current()) loadFolder(); });
   $('tab-add').addEventListener('click', () => { show('add'); fillFolderMenu(); updateNamePreview(); });
 
   $('in-camera').addEventListener('change', (e) => onPicked(e.target.files[0]));
   $('in-file').addEventListener('change', (e) => onPicked(e.target.files[0]));
   $('btn-clear').addEventListener('click', clearPending);
-  $('btn-scan').addEventListener('click', () => { Scanner.wire(); Scanner.open(onScanned); });
+  $('btn-scan').addEventListener('click', async () => {
+    try {
+      if (typeof Scanner === 'undefined') {
+        await new Promise((resolve, reject) => {
+          const el = document.createElement('script'); el.src = 'scan.js?v=' + APP_VERSION;
+          el.onload = resolve; el.onerror = () => reject(new Error('scan.js did not load'));
+          document.head.append(el);
+        });
+      }
+      Scanner.wire(); Scanner.open(onScanned);
+    } catch (e) { banner(`The scanner couldn't start (${e.message}). Close the app completely and open it again.`); }
+  });
   for (const id of ['f-date', 'f-vendor', 'f-amount']) $(id).addEventListener('input', updateNamePreview);
   $('f-amount').addEventListener('blur', () => { const a = parseAmount($('f-amount').value); if (a) $('f-amount').value = a; updateNamePreview(); });
   $('btn-save').addEventListener('click', saveReceipt);
@@ -1031,6 +1485,7 @@ function wire() {
     const next = { rootPath: $('s-root').value.trim().replace(/^\/+|\/+$/g, '') || DEFAULTS.rootPath, receiptsFolder: $('s-receipts').value.trim() || DEFAULTS.receiptsFolder, workbook: $('s-workbook').value.trim() || DEFAULTS.workbook, clientId: $('s-client').value.trim() };
     ls.set('rootPath', next.rootPath); ls.set('receiptsFolder', next.receiptsFolder); ls.set('workbook', next.workbook);
     if (next.workbook !== c.workbook) ls.del('snapshot');
+    ls.set('apiKey', $('s-apikey').value.trim());
     ls.set('accountantName', $('s-acc-name').value.trim() || 'Brayden'); ls.set('accountantEmail', $('s-acc-email').value.trim());
     if (next.clientId && next.clientId !== c.clientId) { ls.set('clientId', next.clientId); ls.del('tokens'); }
     location.replace(redirectUri());
@@ -1052,7 +1507,16 @@ function wire() {
 async function boot() {
   wire();
   if (lockOn()) { showLock('Locked'); unlock(true); }
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      if (state.pending || !$('scan').hidden) { toast('Updated. Reopen the app soon to use the latest version.'); return; }
+      reloaded = true; location.reload();
+    });
+  }
   if (!cfg().clientId) return show('setup');
   try { await handleRedirect(); } catch (e) { banner(friendly(e)); }
   if (!ls.get('tokens')) return show('signin');

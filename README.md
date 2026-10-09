@@ -4,6 +4,9 @@ A phone app (a PWA) for the `Personal Documents/Tax/Tax27` folder in OneDrive.
 
 - **Position**: your FY27 tax position, read live from the `OVERVIEW` sheet of `PTR Calculations 27.xlsx`. Net income, income and deductions, an indicative tax estimate, a breakdown by income stream, deductions by section, key dates (including a flag when a share sale has no capital gain recorded), receipts filed, and how far through the year you are.
 - **To do + reminders** (on the Position tab): a checklist built from the year's dates (monthly receipt filing, quarterly updates for your accountant, the end-of-year sweep, lodgement, and a capital gain to work out when the workbook shows a sale with no gain recorded). Tick items off, and tap *Add reminders to my phone calendar* to get a 9 am alert on each due date.
+- **Inbox**: receipts Claude finds in your Gmail, each with a guess at what it is for and a question where it is not obvious. Answer "Yes, that's right" or "Something else", add a note, and the decision is saved to `Inbox/inbox.json` in your OneDrive. Treatments: claim it, business (Xero), claimed back from Oakwood, personal, part of the capital gain, not a receipt. A weekly scheduled Claude task adds new receipts (see `Inbox/SYNC-PROCEDURE.md`). Gmail will not hand over attachments, so each item links to the email.
+- **Ask**: ask whether you can claim something. Claude answers using your profile (`Inbox/profile.md`), your workbook numbers, your receipt decisions and the current tax news. With a Claude API key in Settings it answers instantly on the phone; without one, questions are saved to `Inbox/questions.json` and answered the next time Claude runs. Answers are general information, not tax advice.
+- **For you** (inside Ask): `Inbox/briefing.json`, tax news (Budget, ATO, Queensland land tax and more) with how each item could affect you and questions to ask.
 - **Files**: browse folders, search, open any file in OneDrive.
 - **Scan a document** (button at the top of Add receipt): take a photo of a page, and the app finds its edges (drag the orange corners if any are off), straightens it, and cleans it up (Original, Clean, or Black & white). Add as many pages as you like and save one PDF, or a single page as a JPEG. All of it happens on the phone. On an iPhone you can also use the built-in scanner: *Choose a photo or PDF*, then *Choose File*, then the `...` menu, then *Scan Documents*.
 - **Add receipt**: take a photo (or pick a photo/PDF), enter date, vendor and amount, and it is saved into `Receipts` (or any subfolder) as `2026-10-09 Bunnings $45.20.jpg`. Photos are shrunk to about 150 KB first.
@@ -50,3 +53,13 @@ It is plain HTML and JavaScript with no build step and no server. It signs in to
 - "Can't unlock? Sign out" on the lock screen removes the lock, the sign-in and the stored figures, so nothing is exposed.
 - Changing the folder, workbook name, receipts folder or client ID: `...` button, Settings.
 - The app can see your whole OneDrive (that is how Microsoft's permission works), but it only ever looks inside the folder set in Settings.
+
+## Privacy of the Inbox, profile and Ask
+
+- The app itself is a public page with no personal data in it. Everything personal (`inbox.json`, `profile.md`, `questions.json`, `briefing.json`) is in your private OneDrive and is read after you sign in.
+- With an API key saved, each question sends your profile, workbook figures and receipt decisions to Claude (Anthropic) to answer. The key lives only in this phone's browser storage. Create a dedicated key in the Claude Console and give it a spending limit.
+- Signing out removes the key, the saved conversation, the lock and the stored figures from the phone.
+
+## If something looks out of date
+
+Settings (the `...` button) shows the app version at the bottom. The app now re-checks its files on every open and reloads itself when a new version arrives. If a button does nothing, close the app completely and open it again.

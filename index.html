@@ -70,8 +70,8 @@
 
   .nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-    display: grid; grid-template-columns: 1fr 1fr 1fr;
-    padding: 6px 16px calc(6px + env(safe-area-inset-bottom));
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
     background: color-mix(in srgb, var(--surface) 94%, transparent);
     backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid var(--line);
@@ -261,6 +261,34 @@
   .banner.warn { background: var(--orange-soft); color: var(--orange-ink); }
   .scan-busy { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; background: color-mix(in srgb, var(--bg) 80%, transparent); font-weight: 650; }
   .scan-busy .spinner { margin: 0; }
+  /* inbox */
+  .nav button { position: relative; }
+  .badge-dot { position: absolute; top: 2px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: #ff8a1f; color: #2b1300; font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }
+  .rcpt { padding: 14px 0; border-top: 1px solid var(--line); }
+  .rcpt:first-child { border-top: 0; padding-top: 0; }
+  .rcpt > input[type="text"] { margin-top: 2px; }
+  .guess { margin: 10px 0; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); border-left: 4px solid var(--orange); }
+  .guess .eyebrow2 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 750; color: var(--orange-ink); margin-bottom: 2px; }
+  .ask { margin: 8px 0 0; font-size: 15px; }
+  .rcpt-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .rcpt-actions .btn { min-height: 46px; flex: 1; }
+  .chip[disabled] { opacity: .5; }
+  /* ask */
+  .nav button { font-size: 11px; }
+  .bubble { max-width: 92%; padding: 10px 14px; border-radius: 16px; font-size: 15px; line-height: 1.45; }
+  .bubble.me { margin-left: auto; background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+  .bubble.ai { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .bubble.ai.err { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+  .bubble.ai.wait { color: var(--muted); }
+  .bubble .who { font-size: 11px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; color: var(--orange-ink); margin-bottom: 4px; }
+  .ans-p { margin: 0 0 8px; } .ans-p:last-child { margin-bottom: 0; }
+  .ans-list { margin: 0 0 8px; padding-left: 20px; } .ans-list li + li { margin-top: 4px; }
+  .qchips { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .qchip { text-align: left; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); font-size: 14px; line-height: 1.35; }
+  .qchip:active { background: var(--line); }
+  .composer { position: sticky; bottom: calc(66px + env(safe-area-inset-bottom)); display: flex; gap: 8px; align-items: flex-end; padding: 8px; margin-top: 12px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 -6px 16px color-mix(in srgb, var(--bg) 90%, transparent); }
+  .composer textarea { flex: 1; resize: none; border: 0; background: transparent; padding: 10px 8px; font-size: 16px; line-height: 1.35; max-height: 140px; outline: none; color: var(--text); }
+  .composer .btn { min-height: 44px; }
 </style>
 </head>
 <body>
@@ -313,6 +341,20 @@
   <!-- Tax position (home) -->
   <section id="view-home" hidden>
     <div id="home" class="stack"></div>
+  </section>
+
+  <!-- Inbox: receipts found in Gmail -->
+  <section id="view-inbox" hidden>
+    <div id="inbox" class="stack"></div>
+  </section>
+
+  <!-- Ask Claude -->
+  <section id="view-ask" hidden>
+    <div id="ask" class="stack"></div>
+    <form id="ask-form" class="composer" hidden>
+      <textarea id="ask-input" rows="1" placeholder="Can I claim…?" aria-label="Ask whether you can claim something" enterkeyhint="send"></textarea>
+      <button id="ask-send" class="btn primary" type="submit">Ask</button>
+    </form>
   </section>
 
   <!-- Files -->
@@ -373,13 +415,22 @@
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H10v-5h4v5h3.5a1 1 0 0 0 1-1v-9"/></svg>
     Position
   </button>
+  <button id="tab-inbox" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7h11L20 13"/><path d="M4 13v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5h-4.5a2.5 2.5 0 0 1-5 0H4z"/></svg>
+    Inbox
+    <span id="inbox-badge" class="badge-dot" hidden>0</span>
+  </button>
+  <button id="tab-ask" type="button">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.8 7L4 20.5l1.6-4.6A8 8 0 1 1 21 12z"/><path d="M9 10.5h6M9 13.5h4"/></svg>
+    Ask
+  </button>
   <button id="tab-files" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
     Files
   </button>
   <button id="tab-add" type="button">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>
-    Add receipt
+    Add
   </button>
 </nav>
 
@@ -476,6 +527,10 @@
         <input id="s-acc-email" type="text" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false">
       </label>
     </div>
+    <label class="field">Claude API key (for instant answers in Ask)
+      <input id="s-apikey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-ant-…">
+    </label>
+    <p class="muted">The key stays on this phone. Create one at console.anthropic.com and give it a spending limit. Your questions and tax figures are sent to Claude to answer.</p>
     <label class="field">Application (client) ID
       <input id="s-client" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
     </label>
@@ -492,10 +547,11 @@
       <button class="btn primary" value="save" id="s-save">Save</button>
     </div>
     <button class="btn quiet block" type="button" id="s-signout">Sign out</button>
+    <p class="muted" style="text-align:center">Version <span id="s-version"></span></p>
   </form>
 </dialog>
 
-<script src="scan.js"></script>
-<script src="app.js"></script>
+<script src="scan.js?v=8"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
