@@ -267,6 +267,9 @@
   .rcpt { padding: 14px 0; border-top: 1px solid var(--line); }
   .rcpt:first-child { border-top: 0; padding-top: 0; }
   .rcpt > input[type="text"] { margin-top: 2px; }
+  .noterow { display: flex; gap: 8px; align-items: stretch; margin-top: 2px; }
+  .noterow input { flex: 1; min-width: 0; }
+  .noterow .btn { min-height: 46px; padding: 0 18px; }
   .guess { margin: 10px 0; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); border-left: 4px solid var(--orange); }
   .guess .eyebrow2 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 750; color: var(--orange-ink); margin-bottom: 2px; }
   .ask { margin: 8px 0 0; font-size: 15px; }
@@ -572,7 +575,7 @@
   </form>
 </dialog>
 
-<script src="scan.js?v=10"></script>
-<script src="app.js?v=10"></script>
+<script src="scan.js?v=11"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

@@ -9,7 +9,7 @@ const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'Files.ReadWrite offline_access';
 const DEFAULTS = { rootPath: 'Personal Documents/Tax/Tax27', receiptsFolder: 'Receipts', workbook: 'PTR Calculations 27.xlsx' };
 const LOCK_AFTER_MS = 2 * 60 * 1000;
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 const MAX_UPLOAD = 100 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
@@ -1021,7 +1021,7 @@ const TREATMENTS = {
   skip: 'Not a receipt',
 };
 const FALLBACK_CATEGORIES = ['Cost of Managing Tax Affairs', 'Council Rates', 'Insurance: Landlord Insurance', 'Interest on Loans', 'Repairs and Maintenance: General Repairs', 'Water Charges', 'Other Work-Related Expenses', 'Home Office Expenses', 'Gifts or Donations'];
-state.inbox = { data: null, error: '', busy: false, saving: '', filter: 'review', open: null };
+state.inbox = { data: null, error: '', busy: false, saving: '', thinking: '', drafts: {}, filter: 'review', open: null };
 
 const inboxFolder = () => state.rootItems.find((i) => i.folder && i.name.toLowerCase() === cfg().inboxFolder.toLowerCase());
 const fmtYmd = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : ''; };
@@ -1150,20 +1150,77 @@ function receiptCard(it, mode) {
         h('button', { class: 'chip', type: 'button', disabled: saving, onclick: () => decide(it.id, { treatment: 'skip', stream: '', category: '', note: '' }) }, 'Confirm: not tax')));
   }
   const open = state.inbox.open === it.id;
-  const note = h('input', { type: 'text', id: `note-${it.id}`, placeholder: g.question ? 'Your answer or a note (optional)' : 'A note (optional)', autocomplete: 'off' });
+  const thinking = state.inbox.thinking === it.id, busy = saving || thinking;
+  const note = h('input', {
+    type: 'text', id: `note-${it.id}`, value: state.inbox.drafts[it.id] || '', autocomplete: 'off', enterkeyhint: 'send',
+    placeholder: g.question ? 'Type your answer here' : 'Add a note',
+    oninput: (e) => { state.inbox.drafts[it.id] = e.target.value; },
+    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); rethink(it); } },
+  });
   const ask = g.question ? h('p', { class: 'ask' }, h('b', {}, 'Question: '), g.question) : null;
   return h('div', { class: 'rcpt' }, ...top,
     h('div', { class: 'guess' },
       h('div', { class: 'eyebrow2' }, `My guess${g.confidence ? ` · ${g.confidence} confidence` : ''}`),
       h('b', {}, guessLine(g)),
       g.reason ? h('p', { class: 'note', style: 'margin-top:4px' }, g.reason) : null,
-      ask),
-    note,
+      ask,
+      it.answer ? h('p', { class: 'note', style: 'margin-top:6px' }, h('b', {}, 'You said: '), it.answer) : null),
+    h('div', { class: 'noterow' }, note,
+      h('button', { class: 'btn orange', type: 'button', disabled: busy, onclick: () => rethink(it) }, thinking ? 'Thinking…' : 'Send')),
     h('div', { class: 'rcpt-actions' },
-      g.treatment ? h('button', { class: 'btn primary', type: 'button', disabled: saving, onclick: () => decide(it.id, { treatment: g.treatment, stream: g.stream || '', category: g.category || '', note: note.value }) }, saving ? 'Saving…' : "Yes, that's right") : null,
-      h('button', { class: 'btn', type: 'button', disabled: saving, onclick: () => { state.inbox.open = open ? null : it.id; renderInbox(); } }, open ? 'Close' : 'Something else')),
+      g.treatment ? h('button', { class: 'btn primary', type: 'button', disabled: busy, onclick: () => decide(it.id, { treatment: g.treatment, stream: g.stream || '', category: g.category || '', note: (note.value || it.answer || '') }) }, saving ? 'Saving…' : "Yes, that's right") : null,
+      h('button', { class: 'btn', type: 'button', disabled: busy, onclick: () => { state.inbox.open = open ? null : it.id; renderInbox(); } }, open ? 'Close' : 'Something else')),
     open ? editorFor(it) : null,
     links ? h('div', {}, links) : null);
+}
+
+// ----- Send: save Dylan's answer and let Claude re-decide the item with it -----
+const RETHINK_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['treatment', 'stream', 'category', 'confidence', 'reason', 'question'],
+  properties: {
+    treatment: { type: 'string', enum: ['claim', 'xero', 'reimbursed', 'personal', 'cgt', 'skip', 'unsure'] },
+    stream: { type: 'string' }, category: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+    reason: { type: 'string' }, question: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+  },
+};
+async function claudeJson(base, schema) {
+  const withSchema = { ...base, output_config: { format: { type: 'json_schema', schema } } };
+  let data, lastErr;
+  for (const go of [() => postClaude(withSchema, true), () => postClaude(withSchema, false), () => postClaude(base, false)]) {
+    try { data = await go(); break; } catch (e) { lastErr = e; if (e.status !== 400) throw e; }
+  }
+  if (!data) throw lastErr;
+  if (data.stop_reason === 'refusal') throw new Error("Claude wouldn't answer that one.");
+  const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+  try { return JSON.parse(text); } catch { const m = /\{[\s\S]*\}/.exec(text); if (!m) throw new Error('Claude sent back something I could not read. Try again.'); return JSON.parse(m[0]); }
+}
+async function rethinkItem(it, answer) {
+  const system = buildExtractPrompt() + '\n\nYOUR JOB NOW: you are not reading a document. You are re-deciding ONE receipt after Dylan answered your question. Treat his answer as a fact. If it settles the treatment, set confidence to high or medium and question to null. If it opens a new uncertainty, ask one specific follow-up question instead.';
+  const item = { vendor: it.vendor, date: it.date, amount: it.amount, gst: it.gst, payment: it.payment, description: it.description, docType: it.docType, ref: it.ref, yourPreviousGuess: it.suggestion || null, dylansAnswer: answer };
+  const r = await claudeJson({ model: ASK_MODEL, max_tokens: 3000, system, messages: [{ role: 'user', content: 'Re-decide this receipt and return the JSON.\n' + JSON.stringify(item, null, 2) }] }, RETHINK_SCHEMA);
+  return { treatment: r.treatment === 'unsure' ? null : r.treatment, stream: r.stream || '', category: r.category || '', confidence: r.confidence, reason: r.reason, question: r.question || null };
+}
+async function rethink(it) {
+  const ib = state.inbox, input = $(`note-${it.id}`);
+  const text = ((input && input.value) || ib.drafts[it.id] || '').trim();
+  if (!text) { toast('Type your answer first, then tap Send.'); return; }
+  if (ib.saving === it.id || ib.thinking === it.id) return;
+  ib.drafts[it.id] = text; ib.thinking = it.id; renderInbox();
+  try {
+    let suggestion = null;
+    if (cfg().apiKey) { if (!state.ask.loaded) await loadAskContext(); suggestion = await rethinkItem(it, text); }
+    await updateItem(it.id, (x) => {
+      x.answer = text; x.answeredAt = new Date().toISOString();
+      if (suggestion) { x.suggestion = suggestion; x.answerHandled = true; } else x.answerHandled = false;
+    });
+    delete ib.drafts[it.id];
+    toast(suggestion ? 'Updated my guess from your answer.' : 'Saved your answer. Add a Claude API key in Settings so I can re-think it.');
+  } catch (e) {
+    if (e instanceof AuthError) { ib.thinking = ''; return needSignIn(); }
+    banner(`Couldn't send that: ${askErrorText(e)}`);
+  }
+  ib.thinking = ''; renderInbox();
 }
 
 function renderInbox() {
