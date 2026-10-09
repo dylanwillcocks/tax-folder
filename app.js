@@ -9,7 +9,7 @@ const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'Files.ReadWrite offline_access';
 const DEFAULTS = { rootPath: 'Personal Documents/Tax/Tax27', receiptsFolder: 'Receipts', workbook: 'PTR Calculations 27.xlsx' };
 const LOCK_AFTER_MS = 2 * 60 * 1000;
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 const MAX_UPLOAD = 100 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
@@ -81,12 +81,23 @@ async function handleRedirect() {
   await tokenRequest({ grant_type: 'authorization_code', code: q.get('code'), redirect_uri: pk.redirect, code_verifier: pk.verifier });
 }
 
+// fetch that gives up instead of hanging forever (a stalled request used to leave "Saving…" spinning)
+async function fetchT(url, opts = {}, ms = 30000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ctl.signal }); }
+  catch (e) {
+    if (e && e.name === 'AbortError') { const err = new Error('The connection timed out. Check your signal and try again.'); err.timeout = true; throw err; }
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
 async function tokenRequest(params) {
-  const res = await fetch(`${AUTH}/token`, {
+  const res = await fetchT(`${AUTH}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: cfg().clientId, scope: SCOPES, ...params }),
-  });
+  }, 20000);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const e = new Error((data.error_description || data.error || 'Sign-in failed').split(/\r?\n/)[0]);
@@ -120,15 +131,15 @@ async function getToken() {
 }
 
 /* ---------- Graph ---------- */
-async function graph(path, { method = 'GET', body, headers = {} } = {}, retry = true) {
+async function graph(path, { method = 'GET', body, headers = {}, ms } = {}, retry = true) {
   const token = await getToken();
-  const res = await fetch(path.startsWith('http') ? path : GRAPH + path, {
+  const res = await fetchT(path.startsWith('http') ? path : GRAPH + path, {
     method, body, headers: { Authorization: `Bearer ${token}`, ...headers },
-  });
+  }, ms || (method === 'GET' ? 30000 : 60000));
   if (res.status === 401 && retry) {
     const t = ls.get('tokens');
     if (t) ls.set('tokens', { ...t, exp: 0 });
-    return graph(path, { method, body, headers }, false);
+    return graph(path, { method, body, headers, ms }, false);
   }
   if (!res.ok) {
     let msg = res.statusText || `HTTP ${res.status}`;
@@ -136,6 +147,39 @@ async function graph(path, { method = 'GET', body, headers = {} } = {}, retry = 
     const e = new Error(msg); e.status = res.status; throw e;
   }
   return res.status === 204 ? null : res.json();
+}
+
+// File uploads go through XMLHttpRequest so we can show real progress and notice a stalled connection.
+async function uploadContent(path, blob, onProgress, retry = true) {
+  const token = await getToken();
+  try {
+    return await new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      let last = Date.now(), done = false;
+      const finish = (fn, v) => { if (done) return; done = true; clearInterval(stall); fn(v); };
+      const stall = setInterval(() => {
+        if (done || Date.now() - last < 45000) return;
+        const e = new Error('The upload stalled. Check your signal and try again.'); e.timeout = true;
+        finish(reject, e); x.abort();
+      }, 5000);
+      x.open('PUT', GRAPH + path);
+      x.setRequestHeader('Authorization', 'Bearer ' + token);
+      x.setRequestHeader('Content-Type', blob.type || 'application/octet-stream');
+      x.upload.onprogress = (e) => { last = Date.now(); if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      x.onload = () => {
+        if (x.status >= 200 && x.status < 300) { let j = {}; try { j = JSON.parse(x.responseText); } catch { /* empty body */ } return finish(resolve, j); }
+        let msg = x.statusText || `HTTP ${x.status}`;
+        try { msg = JSON.parse(x.responseText).error.message || msg; } catch { /* keep default */ }
+        const e = new Error(msg); e.status = x.status; finish(reject, e);
+      };
+      x.onerror = () => finish(reject, new TypeError('Network error'));
+      x.onabort = () => { const e = new Error('The upload was cancelled.'); e.timeout = true; finish(reject, e); };
+      x.send(blob);
+    });
+  } catch (e) {
+    if (e.status === 401 && retry) { const t = ls.get('tokens'); if (t) ls.set('tokens', { ...t, exp: 0 }); return uploadContent(path, blob, onProgress, false); }
+    throw e;
+  }
 }
 const encodePath = (p) => p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
 
@@ -392,10 +436,18 @@ function fillFolderMenu() {
   sel.replaceChildren();
   const root = state.stack[0];
   if (!root) return;
+  sel.append(h('option', { value: 'auto' }, 'Auto: file it by what it is'));
   sel.append(h('option', { value: root.id }, root.name + ' (main folder)'));
   for (const f of [...state.rootFolders].sort((a, b) => a.name.localeCompare(b.name))) sel.append(h('option', { value: f.id }, f.name));
-  const want = state.rootFolders.find((f) => f.name.toLowerCase() === cfg().receiptsFolder.toLowerCase());
-  sel.value = [...sel.options].some((o) => o.value === keep) ? keep : want ? want.id : root.id;
+  sel.value = [...sel.options].some((o) => o.value === keep) ? keep : 'auto';
+}
+function fillAddOptions() {
+  const t = $('f-treatment');
+  if (!t.options.length) t.append(h('option', { value: '' }, 'Not sure yet'), ...Object.entries(TREATMENTS).map(([k, v]) => h('option', { value: k }, v)));
+  const s = $('f-stream'), keep = s.value;
+  s.replaceChildren(h('option', { value: '' }, 'Not sure which stream'), ...streamOptions().map((n) => h('option', { value: n }, n)));
+  s.value = keep;
+  $('f-cats').replaceChildren(...categoryOptions().map((c) => h('option', { value: c })));
 }
 
 async function compressImage(file, maxSide = 2200, quality = 0.85) {
@@ -427,6 +479,10 @@ function clearPending() {
   $('btn-clear').hidden = true;
   $('file-name').hidden = true;
   $('in-camera').value = ''; $('in-file').value = '';
+  state.aiSeq = (state.aiSeq || 0) + 1; state.addAI = null;
+  for (const id of ['f-treatment', 'f-stream', 'f-category', 'f-note']) $(id).value = '';
+  delete $('f-date').dataset.touched;
+  refreshAddCard();
   updateNamePreview();
 }
 
@@ -458,6 +514,7 @@ function setPending(blob, ext, name, { previewBlob = null, info = '' } = {}) {
   if (previewUrl) { $('preview').src = previewUrl; $('preview').hidden = false; } else { $('preview').hidden = true; }
   const text = info || (previewUrl ? '' : `${name} · ${fmtSize(blob.size)}`);
   $('file-name').textContent = text; $('file-name').hidden = !text;
+  state.addAI = null; fillAddOptions(); refreshAddCard(); analyzePending();
 }
 function onScanned({ blob, ext, preview, count }) {
   setPending(blob, ext, 'Scan', { previewBlob: preview, info: `${count} page${count === 1 ? '' : 's'} · ${fmtSize(blob.size)}${ext === '.pdf' ? ' · PDF' : ''}` });
@@ -465,31 +522,176 @@ function onScanned({ blob, ext, preview, count }) {
   if (!$('f-vendor').value) $('f-vendor').focus({ preventScroll: true });
 }
 
+// Subfolders under Receipts, chosen by what the document turned out to be.
+const TREAT_FOLDER = { claim: '', xero: 'To Xero', cgt: 'Capital gains', reimbursed: 'Not claimable', personal: 'Not claimable', skip: 'Not claimable' };
+async function ensureFolder(parentId, name) {
+  try { const f = await graph(`/me/drive/items/${parentId}:/${encodeURIComponent(name)}`); if (f.folder) return f.id; }
+  catch (e) { if (e.status !== 404) throw e; }
+  const made = await graph(`/me/drive/items/${parentId}/children`, {
+    method: 'POST', body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' }), headers: { 'Content-Type': 'application/json' },
+  });
+  return made.id;
+}
+async function destinationFor(treatment) {
+  const sel = $('f-folder');
+  if (sel.value && sel.value !== 'auto') return { id: sel.value, label: sel.selectedOptions[0].textContent.replace(' (main folder)', '') };
+  const rec = state.rootFolders.find((f) => f.name.toLowerCase() === cfg().receiptsFolder.toLowerCase());
+  const base = rec ? rec.id : state.stack[0].id, baseName = rec ? rec.name : state.stack[0].name;
+  const sub = TREAT_FOLDER[treatment] || '';
+  return sub ? { id: await ensureFolder(base, sub), label: `${baseName} / ${sub}` } : { id: base, label: baseName };
+}
+// Records an uploaded document as an already-decided item, so it reaches the workbook log with the rest.
+async function addUploadedItem(file, dest, treatment) {
+  const ai = (state.addAI && state.addAI.result) || {};
+  const amount = parseAmount($('f-amount').value);
+  const entry = {
+    id: 'up-' + Date.now().toString(36), source: 'upload',
+    date: $('f-date').value || today(), vendor: $('f-vendor').value.trim() || ai.vendor || '', docType: ai.docType || 'receipt',
+    description: ai.description || '', amount: amount ? Number(amount) : null, gst: ai.gst == null ? null : ai.gst,
+    payment: ai.payment || null, ref: ai.ref || null, attachments: [file.name],
+    file: { id: file.id || '', name: file.name, webUrl: file.webUrl || '', folder: dest.label }, viewUrl: file.webUrl || '',
+    relevance: 'likely', status: 'decided',
+    suggestion: ai.treatment ? { treatment: ai.treatment, stream: ai.stream || '', category: ai.category || '', confidence: ai.confidence || '', reason: ai.reason || '', question: ai.question || null } : null,
+    decision: { treatment, stream: $('f-stream').value, category: $('f-category').value.trim(), note: $('f-note').value.trim(), at: new Date().toISOString() },
+  };
+  await mutateInbox((data) => { data.items = data.items || []; data.items.push(entry); });
+}
+
 async function saveReceipt() {
   const p = state.pending;
   if (!p || state.saving) return;
   state.saving = true;
   const btn = $('btn-save');
-  btn.textContent = 'Saving…'; btn.disabled = true; banner('');
+  btn.disabled = true; btn.textContent = 'Saving…'; banner('');
+  const treatment = $('f-treatment').value;
   const name = buildName($('f-date').value, $('f-vendor').value, $('f-amount').value, p.ext);
-  const folderId = $('f-folder').value;
-  const folderName = $('f-folder').selectedOptions[0].textContent.replace(' (main folder)', '');
   try {
-    const item = await graph(`/me/drive/items/${folderId}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=rename`, {
-      method: 'PUT', body: p.blob, headers: { 'Content-Type': p.blob.type || 'application/octet-stream' },
-    });
-    toast(`Saved to ${folderName}: ${item.name}`);
+    const dest = await destinationFor(treatment);
+    const file = await uploadContent(`/me/drive/items/${dest.id}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=rename`, p.blob,
+      (f) => { btn.textContent = `Saving… ${Math.round(f * 100)}%`; });
+    let recorded = true;
+    if (treatment) { try { await addUploadedItem(file, dest, treatment); } catch (e) { recorded = false; } }
+    toast(`Saved to ${dest.label}: ${file.name || name}${treatment && !recorded ? ". I couldn't record it in the inbox." : ''}`);
     clearPending();
     $('f-vendor').value = ''; $('f-amount').value = ''; $('f-date').value = today();
     state.dirty = true;
   } catch (e) {
     if (e instanceof AuthError) { state.saving = false; btn.textContent = 'Save to OneDrive'; return needSignIn(); }
-    banner(friendly(e));
+    banner(`Couldn't save: ${friendly(e)}${e.status ? ` (code ${e.status})` : ''}`);
   } finally {
     state.saving = false;
     btn.textContent = 'Save to OneDrive';
     updateNamePreview();
   }
+}
+
+/* ---------- reading a document with Claude ---------- */
+const EXTRACT_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['vendor', 'date', 'total', 'gst', 'payment', 'docType', 'description', 'ref', 'address', 'treatment', 'stream', 'category', 'confidence', 'reason', 'question'],
+  properties: {
+    vendor: { type: 'string' }, date: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    total: { anyOf: [{ type: 'number' }, { type: 'null' }] }, gst: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    payment: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    docType: { type: 'string', enum: ['receipt', 'tax invoice', 'bill', 'statement', 'order confirmation', 'letter', 'other'] },
+    description: { type: 'string' }, ref: { anyOf: [{ type: 'string' }, { type: 'null' }] }, address: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    treatment: { type: 'string', enum: ['claim', 'xero', 'reimbursed', 'personal', 'cgt', 'skip', 'unsure'] },
+    stream: { type: 'string' }, category: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+    reason: { type: 'string' }, question: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+  },
+};
+const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).split(',')[1] || '');
+  r.onerror = () => reject(new Error("Couldn't read the file."));
+  r.readAsDataURL(blob);
+});
+function buildExtractPrompt() {
+  const d = state.position && state.position.data, l = d && d.labels, fy = fyEnd();
+  const streams = streamOptions();
+  const list = (a) => (a && a.length ? a.join(' | ') : '(not available)');
+  return [
+    `You read one document (a receipt, tax invoice, bill, statement or letter) for Dylan's personal tax records and classify it. The financial year is 1 July ${fy - 1} to 30 June ${fy}. Today is ${new Date().toISOString().slice(0, 10)}.`,
+    'Return ONLY the JSON object that matches the schema. Use null (or an empty string for stream and category) when something is not visible or you are not sure. Never invent amounts, dates or numbers.',
+    'vendor = the business. date = the document date as YYYY-MM-DD (the invoice or transaction date, not a print date). total = what was paid or is payable in AUD including GST. gst = the GST amount if shown. payment = card brand and last four digits, PayPal, bank transfer and so on, if shown. description = one short line. ref = invoice, order, policy or assessment number. address = a property address if the document is about a property.',
+    'treatment: claim (a deduction in his personal return), xero (a business or company cost: anything paid on the business card, or clearly Oakwood business), reimbursed (already claimed back from Oakwood), personal (not claimable), cgt (a cost of buying, improving or selling a property that belongs in the capital gain), skip (not a receipt), unsure.',
+    `stream must be exactly one of: ${list(streams)}, or empty. category must be copied exactly from the lists below, or empty.`,
+    'reason = one or two plain sentences. question = one specific question whose answer would change the treatment, or null if you are confident. Use his profile for his cards and standing rules: spend on the business card is xero, personal-card spend is personal, anything Oakwood reimbursed is not claimable, selling costs are cgt, utilities and rates are only deductible for a property that is rented or genuinely available for rent.',
+    '', 'ABOUT DYLAN', state.ask.profile || '(no profile available)',
+    '', 'CATEGORY LISTS (copy exactly)',
+    `Personal return deductions: ${list(l && l.ptr)}`,
+    `Investment property deductions: ${list(l && l.ip)}`,
+    `Company deductions (these go to Xero, not his return): ${list(l && l.ctr)}`,
+  ].join('\n');
+}
+async function extractDocument(blob) {
+  const isPdf = blob.type === 'application/pdf', isImg = /^image\/(jpeg|png|webp|gif)$/.test(blob.type);
+  if (!isPdf && !isImg) throw new Error('I can read photos and PDFs. Choose what this one is below.');
+  const b64 = await blobToBase64(blob);
+  const content = [
+    isPdf ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: blob.type, data: b64 } },
+    { type: 'text', text: 'Read this document and return the JSON.' },
+  ];
+  const base = { model: ASK_MODEL, max_tokens: 4000, system: buildExtractPrompt(), messages: [{ role: 'user', content }] };
+  const withSchema = { ...base, output_config: { format: { type: 'json_schema', schema: EXTRACT_SCHEMA } } };
+  let data, lastErr;
+  for (const go of [() => postClaude(withSchema, true), () => postClaude(withSchema, false), () => postClaude(base, false)]) {
+    try { data = await go(); break; } catch (e) { lastErr = e; if (e.status !== 400) throw e; }
+  }
+  if (!data) throw lastErr;
+  if (data.stop_reason === 'refusal') throw new Error("Claude wouldn't read that one. Choose what it is below.");
+  const text = (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+  let r;
+  try { r = JSON.parse(text); } catch { const m = /\{[\s\S]*\}/.exec(text); if (!m) throw new Error('Claude sent back something I could not read. Try again.'); r = JSON.parse(m[0]); }
+  return r;
+}
+async function analyzePending() {
+  const p = state.pending;
+  if (!p || !cfg().apiKey) return;
+  if (p.blob.size > 20 * 1024 * 1024) { state.addAI = { busy: false, error: 'That file is too large for me to read here. Choose what it is below.' }; refreshAddCard(); return; }
+  const mine = state.aiSeq = (state.aiSeq || 0) + 1;
+  state.addAI = { busy: true }; refreshAddCard();
+  try {
+    if (!state.ask.loaded) await loadAskContext();
+    const result = await extractDocument(p.blob);
+    if (mine !== state.aiSeq || state.pending !== p) return;
+    state.addAI = { busy: false, result };
+    applyAIResult(result);
+  } catch (e) {
+    if (mine !== state.aiSeq) return;
+    if (e instanceof AuthError) return needSignIn();
+    state.addAI = { busy: false, error: askErrorText(e) };
+  }
+  refreshAddCard();
+}
+function applyAIResult(r) {
+  if (r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && !$('f-date').dataset.touched) $('f-date').value = r.date;
+  if (r.vendor && !$('f-vendor').value) $('f-vendor').value = r.vendor;
+  if (r.total != null && !$('f-amount').value) $('f-amount').value = Number(r.total).toFixed(2);
+  $('f-treatment').value = TREATMENTS[r.treatment] ? r.treatment : '';
+  $('f-stream').value = [...$('f-stream').options].some((o) => o.value === r.stream) ? r.stream : '';
+  $('f-category').value = r.category || '';
+  updateNamePreview();
+}
+function refreshAddCard() {
+  const p = state.pending, card = $('ai-card');
+  card.hidden = !p;
+  if (!p) return;
+  const a = state.addAI || {}, st = $('ai-status'), gb = $('ai-guess');
+  gb.hidden = true;
+  if (!cfg().apiKey) { st.textContent = 'Choose what it is below. Add a Claude API key in Settings and I will read and classify documents for you.'; return; }
+  if (a.busy) { st.replaceChildren(h('span', { class: 'spinner', style: 'display:inline-block;vertical-align:middle;margin:0 8px 0 0;width:16px;height:16px' }), 'Claude is reading it…'); return; }
+  if (a.error) { st.replaceChildren(a.error + ' ', h('button', { class: 'chip', type: 'button', onclick: analyzePending }, 'Try again')); return; }
+  if (!a.result) { st.replaceChildren(h('button', { class: 'chip', type: 'button', onclick: analyzePending }, 'Read it with Claude')); return; }
+  const r = a.result;
+  st.textContent = '';
+  gb.hidden = false;
+  gb.replaceChildren(
+    h('div', { class: 'eyebrow2' }, `My guess · ${r.confidence} confidence`),
+    h('b', {}, guessLine({ treatment: r.treatment, stream: r.stream, category: r.category })),
+    r.reason ? h('p', { class: 'note', style: 'margin-top:4px' }, r.reason) : null,
+    r.question ? h('p', { class: 'ask' }, h('b', {}, 'Question: '), r.question) : null);
 }
 
 /* ---------- tax position: read from the PTR workbook's OVERVIEW sheet ---------- */
@@ -508,7 +710,8 @@ const num = (v) => {
 const serialToDate = (n) => new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000);
 
 // rows = sheet_to_json(header:1). Row 1 holds the income-stream names, then Total and Notes.
-function parseOverview(rows) {
+// `live[i]` is a Map(label -> amount) added up straight from stream i's own sheet (or null to use the saved total).
+function parseOverview(rows, live = []) {
   const head = rows[0] || [];
   const streams = [];
   let totalIdx = -1, notesIdx = -1;
@@ -520,7 +723,7 @@ function parseOverview(rows) {
     else streams.push({ idx: i, name: n });
   });
   let section = null;
-  const items = [], dates = [];
+  const entries = [], dates = [];
   const labels = { income: [], ptr: [], ctr: [], ip: [], other: [] };
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r] || [];
@@ -535,18 +738,52 @@ function parseOverview(rows) {
     }
     if (!section) continue;
     if (labels[section] && !/:\s*$/.test(label)) labels[section].push(label);
-    const amounts = streams.map((s) => num(row[s.idx]));
-    let total = totalIdx > 0 ? num(row[totalIdx]) : 0;
-    if (!total) total = amounts.reduce((a, b) => a + b, 0);
+    entries.push({ section, label, row });
+  }
+  const items = [];
+  for (const { section, label, row } of entries) {
+    const amounts = streams.map((s, i) => (live[i] ? (live[i].get(label.toLowerCase()) || 0) : num(row[s.idx])));
+    const total = amounts.reduce((a, b) => a + b, 0);
     if (!total && !amounts.some(Boolean)) continue;
     items.push({ section, label, amounts, total, note: notesIdx > 0 && row[notesIdx] ? String(row[notesIdx]) : '' });
   }
   const sum = (secs, i) => items.filter((x) => secs.includes(x.section)).reduce((a, x) => a + (i == null ? x.total : x.amounts[i]), 0);
   const income = sum(['income']), deductions = sum(DEDUCTION_SECTIONS);
   return {
-    streams: streams.map((s, i) => ({ name: s.name, income: sum(['income'], i), deductions: sum(DEDUCTION_SECTIONS, i) })),
-    items, dates, labels, income, deductions, other: sum(['other']), net: income - deductions,
+    v: 3, streams: streams.map((s, i) => ({ name: s.name, income: sum(['income'], i), deductions: sum(DEDUCTION_SECTIONS, i), sheet: live[i] ? live[i].sheet : null })),
+    streamCols: streams.map((s) => s.idx), items, dates, labels, income, deductions, other: sum(['other']), net: income - deductions,
+    live: live.some(Boolean),
   };
+}
+
+// Each stream's own sheet is the source of truth (the OVERVIEW sheet just adds them up with SUMIF), so adding the sheets
+// ourselves keeps the figures right even when the OVERVIEW's saved totals are out of date.
+function liveTotals(XLSX, wb, ws, rows) {
+  const probe = parseOverview(rows);
+  const labelSet = new Set(Object.values(probe.labels).flat().map((l) => l.toLowerCase()));
+  const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
+  return probe.streamCols.map((c) => {
+    if (!ref) return null;
+    let sheet = null;
+    for (let r = 1; r <= ref.e.r && !sheet; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      const m = cell && typeof cell.f === 'string' && /SUMIF\(\s*(?:'((?:[^']|'')+)'|([A-Za-z0-9_.]+))!/i.exec(cell.f);
+      if (m) sheet = m[1] ? m[1].replace(/''/g, "'") : m[2];
+    }
+    const sh = sheet && wb.Sheets[sheet];
+    if (!sh || !sh['!ref']) return null;
+    const e = XLSX.utils.decode_range(sh['!ref']).e;
+    const data = XLSX.utils.sheet_to_json(sh, { header: 1, raw: true, defval: null, range: { s: { r: 0, c: 0 }, e } });
+    const map = new Map();
+    for (let i = 2; i < data.length; i++) {          // SUMIF reads rows 3 onward: category in column B, amount in column F
+      const cat = String(data[i] && data[i][1] != null ? data[i][1] : '').trim().toLowerCase();
+      if (!cat || !labelSet.has(cat)) continue;
+      const amt = num(data[i][5]);
+      if (amt) map.set(cat, (map.get(cat) || 0) + amt);
+    }
+    map.sheet = sheet;
+    return map;
+  });
 }
 
 let xlsxPromise;
@@ -560,20 +797,23 @@ const loadXLSX = () => (xlsxPromise = xlsxPromise || new Promise((resolve, rejec
 
 async function parseWorkbook(buf) {
   const XLSX = await loadXLSX();
-  let wb = XLSX.read(buf, { type: 'array', sheets: ['OVERVIEW'] });
-  let name = wb.SheetNames.find((n) => /^overview$/i.test(n));
-  if (!name) { wb = XLSX.read(buf, { type: 'array' }); name = wb.SheetNames.find((n) => /^overview$/i.test(n)); }
+  const wb = XLSX.read(buf, { type: 'array' });
+  const name = wb.SheetNames.find((n) => /^overview$/i.test(n));
   if (!name) throw new Error('The workbook has no OVERVIEW sheet.');
-  return parseOverview(XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null }));
+  const ws = wb.Sheets[name];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  let live = [];
+  try { live = liveTotals(XLSX, wb, ws, rows); } catch (e) { live = []; }
+  return parseOverview(rows, live);
 }
 
 async function downloadItem(item) {
   const url = item['@microsoft.graph.downloadUrl'];
   if (url) {
-    try { const r = await fetch(url); if (r.ok) return r.arrayBuffer(); } catch { /* fall through to the authenticated route */ }
+    try { const r = await fetchT(url, {}, 45000); if (r.ok) return r.arrayBuffer(); } catch { /* fall through to the authenticated route */ }
   }
   const token = await getToken();
-  const r = await fetch(`${GRAPH}/me/drive/items/${item.id}/content`, { headers: { Authorization: `Bearer ${token}` } });
+  const r = await fetchT(`${GRAPH}/me/drive/items/${item.id}/content`, { headers: { Authorization: `Bearer ${token}` } }, 45000);
   if (!r.ok) throw new Error(`Couldn't download the workbook (${r.status}).`);
   return r.arrayBuffer();
 }
@@ -588,7 +828,7 @@ async function refreshPosition(force = false) {
   const item = findWorkbook();
   if (!item) { state.position = null; state.positionError = `Couldn't find "${cfg().workbook}" in ${state.stack[0] ? state.stack[0].name : 'the folder'}.`; renderHome(); return; }
   const snap = state.position;
-  if (!force && snap && snap.id === item.id && snap.modified === item.lastModifiedDateTime && snap.data && snap.data.labels) { state.positionError = ''; renderHome(); return; }
+  if (!force && snap && snap.id === item.id && snap.modified === item.lastModifiedDateTime && snap.data && snap.data.v === 3) { state.positionError = ''; renderHome(); return; }
   state.positionBusy = true; state.positionError = ''; renderHome();
   try {
     const data = await parseWorkbook(await downloadItem(item));
@@ -680,6 +920,8 @@ function buildTasks() {
   add(`accountant-${fy}-mar`, `Send ${acc} an update (March quarter)`, Date.UTC(fy, 3, 7), 'Use the Email summary button on the Position tab.');
   add(`sweep-${fy}`, 'Final receipts sweep before 30 June', Date.UTC(fy, 5, 15), 'Check Receipts and the workbook are complete for the year.');
   add(`accountant-${fy}-final`, `Send ${acc} your full-year summary`, Date.UTC(fy, 6, 1), 'Use the Email summary button on the Position tab.');
+  add(`resolutions-${fy}`, 'Sign trust distribution resolutions (due 30 June)', Date.UTC(fy, 5, 15), 'Income resolutions must be made by 30 June.');
+  add(`gain-streaming-${fy}`, 'Record in writing who receives any capital gain (due 31 August)', Date.UTC(fy, 7, 15), 'Needed if a trust sells property this year.');
   add(`lodge-${fy}`, `Lodgement: confirm the plan with ${acc}`, Date.UTC(fy, 9, 1), 'The self-lodgement deadline is 31 October.');
   if (d) {
     const hasGain = d.items.some((i) => /capital gain/i.test(i.label) && i.total);
@@ -805,24 +1047,30 @@ async function loadInbox() {
   if (state.tab === 'inbox') renderInbox();
   if (state.tab === 'home') renderHome();
 }
-// Read the latest file, change one receipt, write it back (retrying once if the file changed underneath us).
-async function updateItem(id, change) {
+// Read the latest file, let `fn` change it, write it back (retrying once if the file changed underneath us).
+async function mutateInbox(fn) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await fetchInbox();
-    if (!r.data) throw new Error('The inbox file is missing.');
-    const it = r.data.items.find((x) => x.id === id);
-    if (!it) throw new Error('That receipt is no longer in the inbox.');
-    change(it);
-    r.data.updated = new Date().toISOString();
+    if (!r.folderId) throw new Error('The Inbox folder is missing in OneDrive.');
+    const data = r.data || { version: 1, source: 'gmail', items: [], skippedIds: [] };
+    fn(data);
+    data.updated = new Date().toISOString();
     try {
       await graph(`/me/drive/items/${r.folderId}:/inbox.json:/content`, {
-        method: 'PUT', body: JSON.stringify(r.data, null, 2),
+        method: 'PUT', body: JSON.stringify(data, null, 2),
         headers: { 'Content-Type': 'application/json', ...(r.etag ? { 'If-Match': r.etag } : {}) },
       });
-      state.inbox.data = r.data;
-      return;
+      state.inbox.data = data; updateInboxBadge();
+      return data;
     } catch (e) { if (e.status !== 412 || attempt) throw e; }
   }
+}
+async function updateItem(id, change) {
+  await mutateInbox((data) => {
+    const it = (data.items || []).find((x) => x.id === id);
+    if (!it) throw new Error('That receipt is no longer in the inbox.');
+    change(it);
+  });
 }
 async function decide(id, decision) {
   const ib = state.inbox; ib.saving = id; renderInbox();
@@ -883,7 +1131,8 @@ function receiptCard(it, mode) {
     h('div', { class: 'stream-head' }, h('span', { class: 'stream-name' }, it.vendor || it.from || 'Unknown sender'), h('b', {}, it.amount != null ? money(it.amount, true) : '—')),
     h('small', { style: 'display:block;color:var(--muted);font-size:13px' }, [fmtYmd(it.date), it.docType, it.description].filter(Boolean).join(' · ')),
   ];
-  const links = it.viewUrl ? h('a', { class: 'chip', style: 'margin-top:8px', href: it.viewUrl, target: '_blank', rel: 'noopener' }, 'Open the email ↗') : null;
+  const docUrl = it.file && it.file.webUrl;
+  const links = (it.viewUrl || docUrl) ? h('a', { class: 'chip', style: 'margin-top:8px', href: docUrl || it.viewUrl, target: '_blank', rel: 'noopener' }, docUrl ? 'Open the document ↗' : 'Open the email ↗') : null;
 
   if (mode === 'done') {
     const d = it.decision || {};
@@ -1048,7 +1297,7 @@ async function postClaude(body, withFallback) {
   const headers = { 'content-type': 'application/json', 'x-api-key': cfg().apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
   let payload = body;
   if (withFallback) { headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; payload = { ...body, fallbacks: 'default' }; }
-  const res = await fetch(ASK_API, { method: 'POST', headers, body: JSON.stringify(payload) });
+  const res = await fetchT(ASK_API, { method: 'POST', headers, body: JSON.stringify(payload) }, 120000);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const e = new Error((data.error && data.error.message) || `Claude returned ${res.status}`);
@@ -1183,17 +1432,18 @@ function renderBriefing(box) {
     box.append(card(h('b', {}, 'No briefing yet'), h('p', { class: 'muted', style: 'margin-top:6px' }, 'Claude writes this from the latest Budget, ATO and Queensland announcements, matched to your setup. Ask Claude to "update my tax briefing".')));
     return;
   }
-  box.append(h('p', { class: 'note', style: 'padding:0 4px' }, `Checked ${fmtYmd(b.generated)}. Each card links to its source. Tap a question to ask Claude about it.`));
+  box.append(h('p', { class: 'note', style: 'padding:0 4px' }, `Checked ${fmtYmd(b.generated)}. ${b.note || ''} Tap a question to ask Claude about it.`));
   for (const it of b.items) {
     const firm = /in effect|legislated/i.test(it.status || '');
     box.append(card(
       h('div', { class: 'stream-head' }, h('span', { class: 'eyebrow2' }, it.topic), h('span', { class: 'pill' + (firm ? '' : ' warn') }, it.status || '')),
-      h('b', { style: 'display:block;margin:4px 0' }, it.headline),
-      it.effective ? h('small', { style: 'display:block;color:var(--muted)' }, it.effective) : null,
-      h('p', { class: 'muted', style: 'font-size:14px;margin:6px 0' }, it.what || ''),
-      it.you ? h('div', { class: 'guess' }, h('div', { class: 'eyebrow2' }, 'How it could affect you'), h('p', { style: 'margin:0' }, it.you)) : null,
+      h('b', { style: 'display:block;margin:4px 0 8px' }, it.headline),
+      it.you ? h('div', { class: 'guess', style: 'margin-top:0' }, h('div', { class: 'eyebrow2' }, 'How it could affect you'), h('p', { style: 'margin:0;font-size:15px' }, it.you)) : null,
       it.questions && it.questions.length ? h('div', { class: 'qchips' }, ...it.questions.map((q) => h('button', { class: 'qchip', type: 'button', onclick: () => askAbout(q) }, q))) : null,
-      it.source && it.source.url ? h('a', { class: 'chip', style: 'margin-top:8px', href: it.source.url, target: '_blank', rel: 'noopener' }, `${it.source.title || 'Source'} ↗`) : null));
+      h('details', { class: 'det' }, h('summary', {}, 'What changed and the source'),
+        it.effective ? h('p', { class: 'note', style: 'margin:8px 0 0' }, it.effective) : null,
+        h('p', { class: 'muted', style: 'font-size:14px;margin:6px 0' }, it.what || ''),
+        it.source && it.source.url ? h('a', { class: 'chip', href: it.source.url, target: '_blank', rel: 'noopener' }, `${it.source.title || 'Source'} ↗`) : null)));
   }
 }
 
@@ -1457,7 +1707,7 @@ function wire() {
   $('ask-form').addEventListener('submit', (e) => { e.preventDefault(); const i = $('ask-input'); const t = i.value; i.value = ''; i.style.height = ''; sendQuestion(t); });
   $('ask-input').addEventListener('input', (e) => { e.target.style.height = 'auto'; e.target.style.height = Math.min(140, e.target.scrollHeight) + 'px'; });
   $('tab-files').addEventListener('click', () => { show('files'); if (state.dirty && current()) loadFolder(); });
-  $('tab-add').addEventListener('click', () => { show('add'); fillFolderMenu(); updateNamePreview(); });
+  $('tab-add').addEventListener('click', () => { show('add'); fillFolderMenu(); fillAddOptions(); refreshAddCard(); updateNamePreview(); });
 
   $('in-camera').addEventListener('change', (e) => onPicked(e.target.files[0]));
   $('in-file').addEventListener('change', (e) => onPicked(e.target.files[0]));
@@ -1478,6 +1728,7 @@ function wire() {
   $('f-amount').addEventListener('blur', () => { const a = parseAmount($('f-amount').value); if (a) $('f-amount').value = a; updateNamePreview(); });
   $('btn-save').addEventListener('click', saveReceipt);
   $('f-date').value = today();
+  $('f-date').addEventListener('input', () => { $('f-date').dataset.touched = '1'; });
 
   $('settings').addEventListener('close', () => {
     if ($('settings').returnValue !== 'save') return;

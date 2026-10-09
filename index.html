@@ -281,6 +281,9 @@
   .bubble.ai.err { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
   .bubble.ai.wait { color: var(--muted); }
   .bubble .who { font-size: 11px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; color: var(--orange-ink); margin-bottom: 4px; }
+  .eyebrow2 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; font-weight: 750; color: var(--orange-ink); }
+  .det { margin-top: 10px; font-size: 14px; }
+  .det summary { cursor: pointer; color: var(--accent); font-weight: 650; padding: 4px 0; }
   .ans-p { margin: 0 0 8px; } .ans-p:last-child { margin-bottom: 0; }
   .ans-list { margin: 0 0 8px; padding-left: 20px; } .ans-list li + li { margin-top: 4px; }
   .qchips { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -387,6 +390,24 @@
       </div>
       <p id="file-name" class="muted" hidden></p>
       <button id="btn-clear" class="btn quiet" type="button" hidden>Choose a different file</button>
+    </div>
+
+    <div id="ai-card" class="card stack" hidden>
+      <div id="ai-status" class="muted"></div>
+      <div id="ai-guess" class="guess" hidden></div>
+      <label class="field">What should happen to it?
+        <select id="f-treatment"></select>
+      </label>
+      <label class="field">Income stream
+        <select id="f-stream"></select>
+      </label>
+      <label class="field">Category
+        <input id="f-category" type="text" list="f-cats" autocomplete="off" placeholder="e.g. Council Rates">
+        <datalist id="f-cats"></datalist>
+      </label>
+      <label class="field">Your answer or a note
+        <input id="f-note" type="text" autocomplete="off" placeholder="Optional">
+      </label>
     </div>
 
     <div class="card stack">
@@ -551,7 +572,7 @@
   </form>
 </dialog>
 
-<script src="scan.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="scan.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>
