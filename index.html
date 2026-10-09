@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Tax Folder</title>
 <meta name="description" content="Browse and add receipts to the Tax27 folder in OneDrive.">
-<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0f1317" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -16,24 +16,27 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
   :root {
-    --bg: #f6f7f9; --surface: #ffffff; --text: #14181f; --muted: #667085;
-    --line: #e4e7ec; --accent: #0f6b5c; --accent-ink: #ffffff; --accent-soft: #e3f1ee;
+    --bg: #f4f6fb; --surface: #ffffff; --text: #121a2b; --muted: #5f6b85;
+    --line: #e1e6f0; --accent: #1b5fd1; --accent-ink: #ffffff; --accent-soft: #e3ecfc;
+    --orange: #f57c00; --orange-ink: #a84a00; --orange-soft: #fff0e0;
     --danger: #b42318; --danger-soft: #fdecea; --radius: 14px;
-    --pdf: #b42318; --img: #6941c6; --xls: #067647; --doc: #175cd3; --other: #667085;
+    --pdf: #e8590c; --img: #2e90fa; --xls: #1b5fd1; --doc: #5b6b8c; --other: #5f6b85;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0f1317; --surface: #181e25; --text: #eef1f5; --muted: #98a2b3;
-      --line: #2a323c; --accent: #3fb59f; --accent-ink: #06201b; --accent-soft: #15302b;
+      --bg: #0b1220; --surface: #131b2d; --text: #edf1fa; --muted: #97a4c0;
+      --line: #243049; --accent: #6ca4ff; --accent-ink: #05163a; --accent-soft: #14274d;
+      --orange: #ff9a3d; --orange-ink: #ffb066; --orange-soft: #3a2410;
       --danger: #f97066; --danger-soft: #3a1b18;
-      --pdf: #f97066; --img: #a58bf0; --xls: #47cd89; --doc: #6ea8fe; --other: #98a2b3;
+      --pdf: #ff9a3d; --img: #5cb0ff; --xls: #6ca4ff; --doc: #9fb0cf; --other: #97a4c0;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #0f1317; --surface: #181e25; --text: #eef1f5; --muted: #98a2b3;
-    --line: #2a323c; --accent: #3fb59f; --accent-ink: #06201b; --accent-soft: #15302b;
+    --bg: #0b1220; --surface: #131b2d; --text: #edf1fa; --muted: #97a4c0;
+    --line: #243049; --accent: #6ca4ff; --accent-ink: #05163a; --accent-soft: #14274d;
+      --orange: #ff9a3d; --orange-ink: #ffb066; --orange-soft: #3a2410;
     --danger: #f97066; --danger-soft: #3a1b18;
-    --pdf: #f97066; --img: #a58bf0; --xls: #47cd89; --doc: #6ea8fe; --other: #98a2b3;
+    --pdf: #ff9a3d; --img: #5cb0ff; --xls: #6ca4ff; --doc: #9fb0cf; --other: #97a4c0;
   }
 
   * { box-sizing: border-box; }
@@ -169,20 +172,20 @@
 
   /* dashboard */
   .hero {
-    background: linear-gradient(160deg, #134138, #071c18); color: #f4f7f6;
-    border: 1px solid #1d4d43; border-radius: 20px; padding: 18px;
+    background: linear-gradient(160deg, #12408f, #071a47); color: #f3f6fd;
+    border: 1px solid #24509f; border-radius: 20px; padding: 18px;
   }
-  .eyebrow { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #f5be14; font-weight: 750; }
+  .eyebrow { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #ffa24a; font-weight: 750; }
   .hero .big { font-size: 40px; line-height: 1.1; font-weight: 750; letter-spacing: -.02em; margin: 4px 0; font-variant-numeric: tabular-nums; }
-  .hero .sub { color: #b8cdc8; font-size: 14px; }
+  .hero .sub { color: #bccdee; font-size: 14px; }
   .progress { height: 8px; border-radius: 99px; background: rgba(255,255,255,.14); margin-top: 14px; overflow: hidden; }
-  .progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #ffe26a, #f5be14); }
-  .progress-label { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: #b8cdc8; }
+  .progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #ffb25e, #ff7a00); }
+  .progress-label { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: #bccdee; }
   .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
   .tile small { display: block; color: var(--muted); font-size: 13px; font-weight: 600; }
   .tile b { display: block; font-size: 22px; margin-top: 2px; font-variant-numeric: tabular-nums; }
-  .tile.in b { color: var(--xls); }
+  .tile.in b { color: var(--accent); }
   .sect { margin: 22px 4px 8px; font-size: 12px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
   .kv { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 15px; }
   .kv:first-child { border-top: 0; padding-top: 0; }
@@ -198,10 +201,10 @@
   .stream small { display: block; color: var(--muted); font-size: 13px; }
   .bar { display: flex; gap: 2px; height: 6px; margin-top: 8px; border-radius: 99px; overflow: hidden; background: var(--line); }
   .bar i { display: block; height: 100%; }
-  .bar .in { background: var(--xls); }
-  .bar .out { background: var(--pdf); }
+  .bar .in { background: var(--accent); }
+  .bar .out { background: var(--orange); }
   .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 700; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
-  .pill.warn { background: color-mix(in srgb, #f5be14 24%, transparent); color: #7a5600; }
+  .pill.warn { background: var(--orange-soft); color: var(--orange-ink); }
   .note { font-size: 13px; color: var(--muted); }
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .date-row { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
@@ -216,20 +219,19 @@
   .check svg { width: 18px; height: 18px; }
   .task[aria-checked="true"] .check { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .task[aria-checked="true"] b { text-decoration: line-through; color: var(--muted); font-weight: 500; }
-  .task small.late { color: var(--danger); font-weight: 650; }
-  .btn.gold { background: #f5be14; border-color: #f5be14; color: #2a1d00; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pill.warn { color: #f5be14; } }
+  .task small.late { color: var(--orange-ink); font-weight: 700; }
+  .btn.orange { background: #ff8a1f; border-color: #ff8a1f; color: #2b1300; }
 
   /* lock screen */
   .lock {
     position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px;
-    background: linear-gradient(160deg, #134138, #071c18); color: #f4f7f6;
+    background: linear-gradient(160deg, #12408f, #071a47); color: #f3f6fd;
   }
   .lock-card { width: 100%; max-width: 320px; text-align: center; display: grid; gap: 12px; justify-items: center; }
   .lock-card img { border-radius: 22px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
   .lock-card h2 { margin: 4px 0 0; font-size: 24px; }
-  .lock-msg { color: #b8cdc8; min-height: 1.4em; font-size: 15px; }
-  .lock .btn.quiet { color: #b8cdc8; }
+  .lock-msg { color: #bccdee; min-height: 1.4em; font-size: 15px; }
+  .lock .btn.quiet { color: #bccdee; }
   .lockrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }
   .lockrow p { font-size: 13px; }
 </style>
@@ -358,7 +360,7 @@
     <img src="icon-512.png" alt="" width="96" height="96">
     <h2>Tax Folder</h2>
     <p id="lock-msg" class="lock-msg">Locked</p>
-    <button id="btn-unlock" class="btn gold block" type="button">Unlock</button>
+    <button id="btn-unlock" class="btn orange block" type="button">Unlock</button>
     <button id="btn-lock-reset" class="btn quiet block" type="button">Can't unlock? Sign out</button>
   </div>
 </div>

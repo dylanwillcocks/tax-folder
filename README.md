@@ -19,7 +19,7 @@ It is plain HTML and JavaScript with no build step and no server. It signs in to
 | `app.js` | Sign-in, OneDrive calls, workbook reader, tax estimate, receipt upload, lock |
 | `xlsx.min.js` | SheetJS 0.18.5 (Apache-2.0), reads the workbook in the browser |
 | `sw.js` | Lets the app open with no signal |
-| `manifest.webmanifest`, `*.png` | Home-screen name and gold `$` icons |
+| `manifest.webmanifest`, `*.png` | Home-screen name and orange `$` icons |
 
 ## One-time setup
 
