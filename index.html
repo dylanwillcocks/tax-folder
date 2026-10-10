@@ -206,6 +206,33 @@
   .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 700; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
   .pill.warn { background: var(--orange-soft); color: var(--orange-ink); }
   .note { font-size: 13px; color: var(--muted); }
+  /* driving: donut + legend. Series hues validated for both surfaces (OKLab CVD check). */
+  .drive-wrap { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .donut { flex: 0 0 auto; width: 132px; height: 132px; }
+  .donut circle { fill: none; stroke-width: 9; }
+  .donut .track { stroke: var(--line); }
+  .donut-mid { font-size: 9px; font-weight: 750; fill: var(--text); }
+  .donut-sub { font-size: 3.5px; font-weight: 700; fill: var(--muted); letter-spacing: .06em; }
+  .drive-legend { flex: 1 1 170px; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+  .drive-legend .row { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+  .drive-legend .dot { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 3px; transform: translateY(1px); }
+  .drive-legend .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .drive-legend .vl { font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
+  .drive-legend .pc { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; min-width: 36px; text-align: right; }
+  .drive-why { font-size: 12.5px; color: var(--muted); padding: 8px 0 0; border-top: 1px solid var(--line); margin-top: 10px; }
+  .drive-why b { color: var(--text); font-weight: 650; }
+  @media (prefers-reduced-motion: no-preference) { .donut circle.seg { transition: stroke-dasharray .4s ease; } }
+  .mom { display: flex; align-items: flex-end; gap: 10px; padding: 4px 2px 0; }
+  .mom-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .mom-col > b { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--text); }
+  .mom-col > small { font-size: 11.5px; color: var(--muted); font-weight: 650; letter-spacing: .03em; }
+  .mom-stack { width: 100%; max-width: 46px; display: flex; flex-direction: column-reverse; gap: 2px;
+               border-radius: 5px; overflow: hidden; background: var(--line); }
+  .mom-stack i { display: block; width: 100%; min-height: 2px; }
+  .paste-hint { text-align: center; margin: 2px 2px 0; line-height: 1.4; }
+  body.pasting::after { content: 'Reading what you pasted…'; position: fixed; inset: auto 0 84px; margin: 0 auto;
+    width: max-content; max-width: calc(100% - 32px); padding: 10px 16px; border-radius: 99px;
+    background: var(--accent); color: var(--accent-ink); font-size: 14px; font-weight: 650; z-index: 60; }
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .date-row { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
   .date-row:first-child { border-top: 0; padding-top: 0; }
@@ -295,6 +322,31 @@
   .composer { position: sticky; bottom: calc(66px + env(safe-area-inset-bottom)); display: flex; gap: 8px; align-items: flex-end; padding: 8px; margin-top: 12px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 -6px 16px color-mix(in srgb, var(--bg) 90%, transparent); }
   .composer textarea { flex: 1; resize: none; border: 0; background: transparent; padding: 10px 8px; font-size: 16px; line-height: 1.35; max-height: 140px; outline: none; color: var(--text); }
   .composer .btn { min-height: 44px; }
+  /* refund or bill estimate */
+  .hero .big.refund { color: #8fe3b1; }
+  .hero .big.owing { color: #ffb066; }
+  .hero .eyebrow.refund { color: #8fe3b1; }
+  .kv.result b { color: var(--accent); }
+  .kv.result.owing b { color: var(--orange-ink); }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .pills .pill { white-space: normal; text-align: left; line-height: 1.3; padding: 4px 10px; }
+  .actions #btn-assume { grid-column: 1 / -1; }
+  /* assumptions sheet */
+  dialog.sheet { width: min(100vw - 16px, 520px); max-height: calc(100dvh - 24px); overflow: auto; overscroll-behavior: contain; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  /* the picker icon was clipped at the field's edge; tapping the field still opens the picker */
+  input[type="date"]::-webkit-calendar-picker-indicator { display: none; }
+  .sheet .group { padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+  .sheet .group .eyebrow2 { margin-bottom: -2px; }
+  .sheet .row2 .field { min-width: 0; }
+  .toggle { display: flex; align-items: center; gap: 12px; min-height: 44px; font-size: 15px; cursor: pointer; }
+  .toggle input { flex: none; width: 24px; height: 24px; margin: 0; accent-color: var(--accent); }
+  .toggle span { flex: 1; min-width: 0; }
+  .toggle small { display: block; color: var(--muted); font-size: 13px; font-weight: 400; }
+  .cgt-row { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); display: grid; gap: 8px; }
+  .cgt-row input[type="text"], .cgt-row input[type="date"] { background: var(--surface); }
+  .cgt-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cgt-foot .btn { min-height: 44px; padding: 0 12px; }
+  .cgt-calc { font-size: 14px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 </style>
 </head>
 <body>
@@ -390,6 +442,8 @@
         <label class="btn block">Choose a photo or PDF
           <input id="in-file" class="sr" type="file" accept="image/*,application/pdf,.pdf">
         </label>
+        <button id="btn-paste" class="btn block" type="button">Paste from clipboard</button>
+        <p class="note paste-hint">Copy a receipt anywhere &mdash; a screenshot, an emailed PDF, a photo &mdash; then paste it here. You can press ⌘V / Ctrl&#8209;V on any screen.</p>
       </div>
       <p id="file-name" class="muted" hidden></p>
       <button id="btn-clear" class="btn quiet" type="button" hidden>Choose a different file</button>
@@ -575,7 +629,104 @@
   </form>
 </dialog>
 
-<script src="scan.js?v=13"></script>
-<script src="app.js?v=13"></script>
+<dialog id="assume" class="sheet" aria-labelledby="a-title" tabindex="-1">
+  <form method="dialog" class="stack" id="assume-form">
+    <div>
+      <h2 id="a-title">Assumptions</h2>
+      <p class="muted">What the workbook cannot know: your pay, PAYG and the rest of this year's return. Every field is optional, in dollars. Saved privately to your OneDrive Inbox folder as assumptions.json.</p>
+    </div>
+    <div class="group">
+      <div class="eyebrow2">Salary and PAYG</div>
+      <label class="field">Salary and wages for the year (gross, expected; director fees count)
+        <input id="a-salary" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+      </label>
+      <label class="field">PAYG withheld so far
+        <input id="a-payg" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+      </label>
+      <div class="row2">
+        <label class="field">Withheld per pay
+          <input id="a-perpay" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+        </label>
+        <label class="field">Pays left to 30 June
+          <input id="a-paysleft" type="text" inputmode="numeric" autocomplete="off" placeholder="0">
+        </label>
+      </div>
+      <p class="note">Total withheld by 30 June: <b id="a-payg-total">$0.00</b></p>
+    </div>
+    <div class="group">
+      <div class="eyebrow2">Other income</div>
+      <div class="row2">
+        <label class="field">Dividends (cash)
+          <input id="a-dividends" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+        </label>
+        <label class="field">Franking credits
+          <input id="a-franking" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+        </label>
+      </div>
+      <div class="row2">
+        <label class="field">Interest
+          <input id="a-interest" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+        </label>
+        <label class="field">Trust distributions expected
+          <input id="a-trust" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+        </label>
+      </div>
+      <label class="field">Other income
+        <input id="a-other" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+      </label>
+    </div>
+    <div class="group">
+      <div class="eyebrow2">Deductions</div>
+      <div class="row2">
+        <label class="field">Deductible personal super contributions
+          <input id="a-super" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+        </label>
+        <label class="field">Income protection premiums (if not in the workbook)
+          <input id="a-ip" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+        </label>
+      </div>
+      <div id="a-wr"></div>
+      <label class="toggle"><input id="a-std" type="checkbox"><span><span id="a-std-label">Use the standard deduction instead</span><small id="a-std-note"></small></span></label>
+      <label class="toggle"><input id="a-ctr" type="checkbox"><span>Include "CTR Deductions" rows in the personal estimate<small>Company-style categories in the workbook. Ask your accountant how these are treated. <span id="a-ctr-total"></span></small></span></label>
+    </div>
+    <div class="group">
+      <div class="eyebrow2">HELP debt and Medicare</div>
+      <label class="toggle"><input id="a-help" type="checkbox"><span>I have a HELP debt</span></label>
+      <label class="field" id="a-help-balance-wrap">Balance owing (the repayment is capped at this)
+        <input id="a-help-balance" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+      </label>
+      <label class="toggle"><input id="a-hospital" type="checkbox"><span>Private hospital cover for the whole year<small>Without it the Medicare levy surcharge applies.</small></span></label>
+      <div class="row2">
+        <label class="field">Surcharge test
+          <select id="a-family"><option value="single">Single</option><option value="family">Family</option></select>
+        </label>
+        <label class="field">Dependent children
+          <input id="a-children" type="text" inputmode="numeric" autocomplete="off" placeholder="0">
+        </label>
+      </div>
+      <label class="field" id="a-spouse-wrap">Spouse income (family test only)
+        <input id="a-spouse" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+      </label>
+    </div>
+    <div class="group">
+      <div class="eyebrow2">Capital gains events</div>
+      <label class="field">Capital loss carried forward from earlier years
+        <input id="a-carried" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
+      </label>
+      <div id="a-cgt-rows" class="stack"></div>
+      <button class="btn block" type="button" id="a-cgt-add">Add an asset</button>
+      <p class="note">Cost base = price paid + buying costs + improvements + selling costs. The contract date is the CGT date. Held over 12 months counts from the day after purchase to the day before sale.</p>
+    </div>
+    <p id="a-status" class="banner" hidden></p>
+    <div class="row2">
+      <button class="btn" type="button" id="a-cancel">Cancel</button>
+      <button class="btn primary" type="button" id="a-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="scan.js?v=16"></script>
+<script src="estimate.js?v=16"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>

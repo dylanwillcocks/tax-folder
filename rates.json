@@ -1,0 +1,193 @@
+{
+ "fy": 2027,
+ "label": "2026-27",
+ "verifiedOn": "2026-10-09",
+ "verifiedHow": "Each figure read on the official page named in its source on 9 Oct 2026 and independently re-checked; provisional=true marks a figure the ATO had not yet published for 2026-27 (the latest published year is used).",
+ "incomeTax": {
+  "brackets": [
+   {
+    "upTo": 18200,
+    "rate": 0
+   },
+   {
+    "upTo": 45000,
+    "rate": 0.15
+   },
+   {
+    "upTo": 135000,
+    "rate": 0.3
+   },
+   {
+    "upTo": 190000,
+    "rate": 0.37
+   },
+   {
+    "upTo": null,
+    "rate": 0.45
+   }
+  ],
+  "checkpoints": {
+   "45000": 4020,
+   "135000": 31020,
+   "190000": 51370
+  },
+  "source": "https://www.ato.gov.au/tax-rates-and-codes/tax-rates-australian-residents",
+  "note": "15% first bracket for 2026-27 (Treasury Laws Amendment (More Cost of Living Relief) Act 2025); 14% from 2027-28. Rates exclude the Medicare levy."
+ },
+ "medicareLevy": {
+  "rate": 0.02,
+  "source": "https://www.ato.gov.au/individuals-and-families/medicare-and-private-health-insurance/medicare-levy/what-is-the-medicare-levy",
+  "lowIncome": {
+   "single": {
+    "lower": 28011,
+    "upper": 35013,
+    "phaseInRate": 0.1
+   },
+   "year": "2025-26",
+   "provisional": true,
+   "note": "2026-27 thresholds not published as at 9 Oct 2026 (usually set in the following May Budget). Below lower: no levy; between: 10% of income above the lower threshold; above upper: 2% of taxable income.",
+   "source": "https://www.ato.gov.au/individuals-and-families/medicare-and-private-health-insurance/medicare-levy/medicare-levy-reduction/medicare-levy-reduction-for-low-income-earners"
+  }
+ },
+ "lito": {
+  "max": 700,
+  "taper1": {
+   "from": 37500,
+   "to": 45000,
+   "rate": 0.05
+  },
+  "taper2": {
+   "from": 45000,
+   "to": 66667,
+   "rate": 0.015
+  },
+  "nonRefundable": true,
+  "source": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/tax-offsets/low-income-tax-offset"
+ },
+ "mls": {
+  "single": [
+   {
+    "upTo": 105000,
+    "rate": 0
+   },
+   {
+    "upTo": 123000,
+    "rate": 0.01
+   },
+   {
+    "upTo": 164000,
+    "rate": 0.0125
+   },
+   {
+    "upTo": null,
+    "rate": 0.015
+   }
+  ],
+  "family": [
+   {
+    "upTo": 210000,
+    "rate": 0
+   },
+   {
+    "upTo": 246000,
+    "rate": 0.01
+   },
+   {
+    "upTo": 328000,
+    "rate": 0.0125
+   },
+   {
+    "upTo": null,
+    "rate": 0.015
+   }
+  ],
+  "familyPerExtraChild": 1500,
+  "incomeBasis": "taxable income + reportable fringe benefits + total net investment losses + reportable super contributions (spouse income combined for the family test); the surcharge is charged on taxable income plus reportable fringe benefits",
+  "appliesIf": "no appropriate private hospital cover for the whole year",
+  "source": "https://www.ato.gov.au/individuals-and-families/medicare-and-private-health-insurance/medicare-levy-surcharge/medicare-levy-surcharge-income-thresholds-and-rates"
+ },
+ "help": {
+  "year": "2026-27",
+  "bands": [
+   {
+    "upTo": 69528,
+    "rate": 0,
+    "base": 0
+   },
+   {
+    "upTo": 129717,
+    "rate": 0.15,
+    "base": 0,
+    "over": 69528
+   },
+   {
+    "upTo": 186050,
+    "rate": 0.17,
+    "base": 9028,
+    "over": 129717
+   },
+   {
+    "upTo": null,
+    "flatRateOnTotalIncome": 0.1
+   }
+  ],
+  "incomeBasis": "repayment income = taxable income + reportable fringe benefits + total net investment loss + reportable super contributions + exempt foreign employment income",
+  "note": "Marginal system from 1 July 2025. Top band is 10% of the WHOLE repayment income (a cliff). Capped at the remaining loan balance.",
+  "source": "https://www.ato.gov.au/tax-rates-and-codes/study-and-training-support-loans-rates-and-repayment-thresholds"
+ },
+ "standardDeduction": {
+  "max": 1000,
+  "from": "2026-27",
+  "note": "Instant tax deduction of up to $1,000 for work-related expenses with no receipts, for residents with assessable labour income (salary and wages, director fees). Use it when actual work-related claims are below $1,000.",
+  "source": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/standard-deduction-for-work-related-expenses"
+ },
+ "cgt": {
+  "discount": 0.5,
+  "holdMonths": 12,
+  "rules": "Losses (carried forward first) are subtracted before the discount; the CGT event for a sale under contract is the contract date, not settlement; selling costs (agent, legal, advertising, conveyancing) go in the cost base, not deductions.",
+  "source": "https://www.ato.gov.au/individuals-and-families/investments-and-assets/capital-gains-tax/cgt-discount",
+  "costBaseSource": "https://www.ato.gov.au/individuals-and-families/investments-and-assets/capital-gains-tax/calculating-your-cgt/cost-base-of-asset"
+ },
+ "rental": {
+  "immediateDeductionAssetMax": 300,
+  "note": "Assets costing $300 or less (not part of a set over $300) are an immediate deduction; repairs and maintenance deductible when incurred; initial repairs and improvements are capital.",
+  "source": "https://www.ato.gov.au/individuals-and-families/investments-and-assets/property-and-land/residential-rental-properties/rental-expenses/depreciating-assets-in-rental-properties"
+ },
+ "wfhFixedRatePerHour": {
+  "value": 0.7,
+  "year": "2025-26",
+  "provisional": true,
+  "source": "https://www.ato.gov.au/individuals-and-families/income-deductions-offsets-and-records/deductions-you-can-claim/work-related-deductions/working-from-home-expenses/fixed-rate-method"
+ },
+ "super": {
+  "concessionalCap": 32500,
+  "div293Threshold": 250000,
+  "source": "https://www.ato.gov.au/tax-rates-and-codes/key-superannuation-rates-and-thresholds/contributions-caps",
+  "div293Source": "https://www.ato.gov.au/individuals-and-families/super-for-individuals-and-families/super/growing-and-keeping-track-of-your-super/caps-limits-and-tax-on-super-contributions/division-293-tax-on-concessional-contributions-by-high-income-earners"
+ },
+ "dueDates": {
+  "selfLodge": "2027-10-31",
+  "selfLodgePaymentIfBill": "2027-11-21",
+  "agentLodgeGeneral": "2028-05-15",
+  "agentListBy": "2027-10-31",
+  "source": "https://www.ato.gov.au/individuals-and-families/your-tax-return/before-you-prepare-your-tax-return/preparing-your-tax-return",
+  "agentSource": "https://www.ato.gov.au/tax-and-super-professionals/for-tax-professionals/prepare-and-lodge/registered-agent-lodgment-program/due-dates-for-tax-returns-by-client-type/individuals-and-trusts"
+ },
+ "upcoming": [
+  {
+   "from": "2027-28",
+   "what": "Negative gearing limited to new builds and the 50% CGT discount replaced by cost base indexation for individuals, trusts and partnerships (Budget 2026-27 measure, now law).",
+   "source": "https://www.ato.gov.au/about-ato/new-legislation/in-detail/individuals/tax-reform-boosting-home-ownership-reforming-negative-gearing-and-capital-gains-tax"
+  },
+  {
+   "from": "2027-28",
+   "what": "Working Australians tax offset, up to $250.",
+   "source": "https://www.ato.gov.au/about-ato/new-legislation/in-detail/individuals/working-australians-tax-offset"
+  },
+  {
+   "from": "2027-28",
+   "what": "First tax bracket falls to 14%.",
+   "source": "https://www.ato.gov.au/tax-rates-and-codes/tax-rates-australian-residents"
+  }
+ ]
+}

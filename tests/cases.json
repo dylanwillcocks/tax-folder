@@ -1,0 +1,1460 @@
+{
+  "fy": 2027,
+  "workbookB": {
+    "comment": "Workbook for cases b, c, d: income 52,000 (Rental 39,000 + Business 13,000) and deductions 1,177.09, all work-related PTR rows (Other Work-Related 877.09 + Home Office 300), net 50,822.91. The work-related total is over the 1,000 cap, so the standard deduction default stays off. A 2,500 Capital Gains income row and a 600 CTR row are there to prove they are excluded.",
+    "items": [
+      {
+        "section": "income",
+        "label": "Rental Income",
+        "total": 39000
+      },
+      {
+        "section": "income",
+        "label": "Business Income (if self-employed or from a small business)",
+        "total": 13000
+      },
+      {
+        "section": "income",
+        "label": "Capital Gains (from the sale of property, shares, etc.)",
+        "total": 2500
+      },
+      {
+        "section": "ptr",
+        "label": "Other Work-Related Expenses (e.g., tools, equipment, software)",
+        "total": 877.09
+      },
+      {
+        "section": "ptr",
+        "label": "Home Office Expenses (e.g., electricity, internet, phone)",
+        "total": 300
+      },
+      {
+        "section": "ctr",
+        "label": "Software Subscriptions",
+        "total": 600
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "a",
+      "name": "no assumptions: round-1 fallback",
+      "working": [
+        "estimatePosition(d, null) must not produce a chain: result undefined, chain absent, hasAssumptions false.",
+        "An empty object {} and an object of blank strings count as no assumptions too."
+      ],
+      "d": "workbookB",
+      "a": null,
+      "expectAbsent": [
+        "result",
+        "chain",
+        "taxableIncome"
+      ],
+      "expect": {
+        "hasAssumptions": false
+      }
+    },
+    {
+      "id": "a2",
+      "name": "no assumptions: empty object",
+      "working": [
+        "Same as a, with a = {} (nothing filled in, never saved)."
+      ],
+      "d": "workbookB",
+      "a": {},
+      "expectAbsent": [
+        "result",
+        "chain"
+      ],
+      "expect": {
+        "hasAssumptions": false
+      }
+    },
+    {
+      "id": "b",
+      "name": "salary 120,000, PAYG 30,000, workbook net 50,822.91, hospital cover, no HELP",
+      "working": [
+        "workbookIncome = 39,000 + 13,000 = 52,000 (the 2,500 Capital Gains row is excluded; CGT comes from the events list)",
+        "workbookDeductions = 877.09 + 300 work-related PTR rows = 1,177.09; over the 1,000 cap so the standard deduction default is OFF (CTR 600 left out by default)",
+        "taxable = 52,000 + 120,000 - 1,177.09 = 170,822.91",
+        "tax = 31,020 + 0.37 x (170,822.91 - 135,000) = 31,020 + 13,254.4767 = 44,274.48",
+        "LITO = 0 (over 66,667); Medicare = 2% x 170,822.91 = 3,416.4582 = 3,416.46",
+        "MLS 0 (hospital cover); HELP 0; total = 44,274.48 + 3,416.46 = 47,690.94",
+        "result = 30,000 - 47,690.94 = -17,690.94 (owing)",
+        "marginal = 0.37 + 0.02 = 0.39"
+      ],
+      "d": "workbookB",
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 30000,
+        "hospitalCover": true,
+        "help": {
+          "has": false
+        }
+      },
+      "expect": {
+        "workbookIncome": 52000,
+        "workbookDeductions": 1177.09,
+        "ctrTotal": 600,
+        "includeCtr": false,
+        "standardDeductionOn": false,
+        "taxableIncome": 170822.91,
+        "incomeTax": 44274.48,
+        "lito": 0,
+        "medicareLevy": 3416.46,
+        "mls": 0,
+        "help": 0,
+        "totalLiability": 47690.94,
+        "credits": 30000,
+        "result": -17690.94,
+        "marginal": 0.39,
+        "workRelatedTotal": 1177.09
+      },
+      "expectWarnings": [
+        "ctr-excluded"
+      ],
+      "expectNoWarnings": [
+        "standard-deduction",
+        "medicare-provisional",
+        "help-cliff",
+        "mls-boundary"
+      ]
+    },
+    {
+      "id": "b2",
+      "name": "b with CTR rows included",
+      "working": [
+        "workbookDeductions = 1,177.09 + 600 CTR = 1,777.09; taxable = 172,000 - 1,777.09 = 170,222.91",
+        "tax = 31,020 + 0.37 x 35,222.91 = 31,020 + 13,032.4767 = 44,052.48; Medicare = 2% x 170,222.91 = 3,404.4582 = 3,404.46",
+        "total = 47,456.94; result = 30,000 - 47,456.94 = -17,456.94"
+      ],
+      "d": "workbookB",
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 30000,
+        "hospitalCover": true,
+        "includeCtr": true
+      },
+      "expect": {
+        "workbookDeductions": 1777.09,
+        "taxableIncome": 170222.91,
+        "incomeTax": 44052.48,
+        "medicareLevy": 3404.46,
+        "result": -17456.94
+      },
+      "expectNoWarnings": [
+        "ctr-excluded"
+      ]
+    },
+    {
+      "id": "b3",
+      "name": "PAYG projected from per-pay and pays left",
+      "working": [
+        "credits = withheld so far 12,000 + 1,000 per pay x 18 pays left = 30,000, so the result matches case b: -17,690.94"
+      ],
+      "d": "workbookB",
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 12000,
+        "paygPerPay": 1000,
+        "paysLeft": 18,
+        "hospitalCover": true
+      },
+      "expect": {
+        "credits": 30000,
+        "result": -17690.94
+      }
+    },
+    {
+      "id": "c",
+      "name": "b with HELP yes, balance 20,000",
+      "working": [
+        "repayment income = taxable 170,822.91, in the 129,717 to 186,050 band",
+        "HELP = 9,028 + 0.17 x (170,822.91 - 129,717) = 9,028 + 0.17 x 41,105.91 = 9,028 + 6,988.0047 = 16,016.00",
+        "under the 20,000 balance so not capped; total = 47,690.94 + 16,016.00 = 63,706.94; result = 30,000 - 63,706.94 = -33,706.94",
+        "marginal = 0.37 + 0.02 + 0.17 = 0.56"
+      ],
+      "d": "workbookB",
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 30000,
+        "hospitalCover": true,
+        "help": {
+          "has": true,
+          "balance": 20000
+        }
+      },
+      "expect": {
+        "taxableIncome": 170822.91,
+        "help": 16016,
+        "helpCapped": false,
+        "totalLiability": 63706.94,
+        "result": -33706.94,
+        "marginal": 0.56
+      },
+      "expectWarnings": [
+        "help-basis"
+      ],
+      "expectNoWarnings": [
+        "help-cliff",
+        "help-capped"
+      ]
+    },
+    {
+      "id": "c2",
+      "name": "HELP capped at a 5,000 balance",
+      "working": [
+        "uncapped repayment is 16,016.00 (case c); balance 5,000 so HELP = 5,000",
+        "total = 47,690.94 + 5,000 = 52,690.94; result = 30,000 - 52,690.94 = -22,690.94",
+        "marginal drops the HELP rate once capped: 0.37 + 0.02 = 0.39"
+      ],
+      "d": "workbookB",
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 30000,
+        "hospitalCover": true,
+        "help": {
+          "has": true,
+          "balance": 5000
+        }
+      },
+      "expect": {
+        "helpUncapped": 16016,
+        "help": 5000,
+        "helpCapped": true,
+        "result": -22690.94,
+        "marginal": 0.39
+      },
+      "expectWarnings": [
+        "help-capped"
+      ]
+    },
+    {
+      "id": "d",
+      "name": "b with no hospital cover, single",
+      "working": [
+        "MLS income (single) = taxable 170,822.91, over 164,000 so tier 3 at 1.5%",
+        "MLS = 1.5% x 170,822.91 = 2,562.34365 = 2,562.34",
+        "total = 44,274.48 + 3,416.46 + 2,562.34 = 50,253.28; result = 30,000 - 50,253.28 = -20,253.28",
+        "170,822.91 - 164,000 = 6,822.91, more than 5,000 from the boundary, so no mls-boundary warning"
+      ],
+      "d": "workbookB",
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 30000,
+        "hospitalCover": false,
+        "family": {
+          "status": "single"
+        }
+      },
+      "expect": {
+        "mlsIncome": 170822.91,
+        "mlsTier": 3,
+        "mlsRate": 0.015,
+        "mls": 2562.34,
+        "totalLiability": 50253.28,
+        "result": -20253.28,
+        "marginal": 0.405
+      },
+      "expectNoWarnings": [
+        "mls-boundary"
+      ]
+    },
+    {
+      "id": "d2",
+      "name": "no hospital cover, family test with two children and spouse income",
+      "working": [
+        "family thresholds grow by 1,500 for each child after the first: two children adds 1,500, so tier 1 starts above 211,500",
+        "family income = 170,822.91 + spouse 38,000 = 208,822.91, under 211,500 so tier 0, MLS = 0",
+        "208,822.91 is within 5,000 of the 211,500 boundary (2,677.09 away) so the mls-boundary warning fires"
+      ],
+      "d": "workbookB",
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 30000,
+        "hospitalCover": false,
+        "family": {
+          "status": "family",
+          "children": 2,
+          "spouseIncome": 38000
+        }
+      },
+      "expect": {
+        "mlsIncome": 208822.91,
+        "mlsTier": 0,
+        "mls": 0,
+        "result": -17690.94
+      },
+      "expectWarnings": [
+        "mls-boundary"
+      ]
+    },
+    {
+      "id": "e",
+      "name": "low income: salary 30,000 only, PAYG 2,000",
+      "working": [
+        "taxable = 30,000 (no workbook)",
+        "tax = 0.15 x (30,000 - 18,200) = 0.15 x 11,800 = 1,770",
+        "LITO = 700 (under 37,500), non-refundable: min(700, 1,770) = 700",
+        "Medicare: between 28,011 and 35,013 so 10% x (30,000 - 28,011) = 198.90 (less than 2% x 30,000 = 600)",
+        "total = 1,770 - 700 + 198.90 = 1,268.90; result = 2,000 - 1,268.90 = 731.10 (refund)",
+        "marginal = 0.15 + 0.10 phase-in = 0.25",
+        "Standard deduction default: no workbook rows (0 < 1,000) and salary > 0, so it is ON and 1,000 comes off... BUT the spec's figure assumes none, so this case turns the toggle off explicitly"
+      ],
+      "d": null,
+      "a": {
+        "salary": 30000,
+        "paygWithheld": 2000,
+        "hospitalCover": true,
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "taxableIncome": 30000,
+        "incomeTax": 1770,
+        "lito": 700,
+        "medicareLevy": 198.9,
+        "totalLiability": 1268.9,
+        "result": 731.1,
+        "marginal": 0.25
+      },
+      "expectWarnings": [
+        "medicare-provisional"
+      ]
+    },
+    {
+      "id": "e2",
+      "name": "LITO taper and the non-refundable floor",
+      "working": [
+        "taxable 20,000: tax = 0.15 x 1,800 = 270; LITO would be 700 but is capped at the 270 tax, so 270; Medicare 0 (under 28,011); result = 500 - 0 = 500",
+        "taxable 50,000 (second taper): tax = 4,020 + 0.3 x 5,000 = 5,520; LITO = 325 - 0.015 x 5,000 = 250; Medicare 2% = 1,000; total 6,270; result = 6,000 - 6,270 = -270"
+      ],
+      "d": null,
+      "a": {
+        "salary": 20000,
+        "paygWithheld": 500,
+        "hospitalCover": true,
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "incomeTax": 270,
+        "lito": 270,
+        "medicareLevy": 0,
+        "result": 500
+      },
+      "also": {
+        "a": {
+          "salary": 50000,
+          "paygWithheld": 6000,
+          "hospitalCover": true,
+          "useStandardDeduction": false
+        },
+        "expect": {
+          "incomeTax": 5520,
+          "lito": 250,
+          "medicareLevy": 1000,
+          "result": -270
+        }
+      }
+    },
+    {
+      "id": "f",
+      "name": "CGT: ABC shares, held over 12 months, discounted",
+      "working": [
+        "bought 1 Mar 2025, sold 6 Jul 2026: the sale is after the first anniversary (2 Mar 2026) so held > 12 months",
+        "gain = 13,775 - 10,000 = 3,775; no losses; discount 50% x 3,775 = 1,887.50; net capital gain = 1,887.50",
+        "taxable = 1,887.50 only; tax 0 (under 18,200); LITO 0 (no tax to offset); Medicare 0; result = 0 - 0 = 0"
+      ],
+      "d": null,
+      "a": {
+        "cgt": {
+          "carriedLoss": null,
+          "events": [
+            {
+              "asset": "ABC shares",
+              "bought": "2025-03-01",
+              "costBase": 10000,
+              "sold": "2026-07-06",
+              "proceeds": 13775
+            }
+          ]
+        }
+      },
+      "expect": {
+        "netCapitalGain": 1887.5,
+        "taxableIncome": 1887.5,
+        "incomeTax": 0,
+        "result": 0
+      },
+      "expectCgt": {
+        "totalGains": 3775,
+        "discountGains": 3775,
+        "otherGains": 0,
+        "lossesApplied": 0,
+        "discount": 1887.5,
+        "net": 1887.5
+      },
+      "expectRows": [
+        {
+          "gain": 3775,
+          "heldOver12Months": true,
+          "discountApplies": true,
+          "missingCostBase": false
+        }
+      ]
+    },
+    {
+      "id": "f2",
+      "name": "CGT: a 1,000 loss on a second asset held 6 months comes off before the discount",
+      "working": [
+        "ABC gain 3,775 (discount-eligible); second asset bought 10 Jan 2026 sold 10 Jul 2026 (6 months): 4,000 - 5,000 = -1,000 loss",
+        "losses first: 3,775 - 1,000 = 2,775; then discount 50% on the remainder = 1,387.50",
+        "the wrong order (discount first, 1,887.50 - 1,000 = 887.50) would give 887.50, so 1,387.50 proves losses come first"
+      ],
+      "d": null,
+      "a": {
+        "cgt": {
+          "events": [
+            {
+              "asset": "ABC shares",
+              "bought": "2025-03-01",
+              "costBase": 10000,
+              "sold": "2026-07-06",
+              "proceeds": 13775
+            },
+            {
+              "asset": "Short hold",
+              "bought": "2026-01-10",
+              "costBase": 5000,
+              "sold": "2026-07-10",
+              "proceeds": 4000
+            }
+          ]
+        }
+      },
+      "expect": {
+        "netCapitalGain": 1387.5
+      },
+      "expectCgt": {
+        "totalGains": 3775,
+        "yearLosses": 1000,
+        "lossesApplied": 1000,
+        "discount": 1387.5,
+        "net": 1387.5,
+        "lossToCarry": 0
+      },
+      "expectRows": [
+        {
+          "gain": 3775,
+          "heldOver12Months": true
+        },
+        {
+          "gain": -1000,
+          "heldOver12Months": false,
+          "discountApplies": false
+        }
+      ]
+    },
+    {
+      "id": "f3",
+      "name": "CGT: losses go against non-discount gains first",
+      "working": [
+        "ABC gain 3,775 (discount), a 500 gain on an asset held 3 months (no discount), a 1,000 loss",
+        "losses to the non-discount gain first: 500 - 500 = 0; the remaining 500 off the discount gain: 3,775 - 500 = 3,275",
+        "discount 50% x 3,275 = 1,637.50; net = 0 + 1,637.50 = 1,637.50",
+        "applying the loss to the discount gain first would give (3,775 - 1,000) x 0.5 + 500 = 1,887.50, so 1,637.50 proves the order"
+      ],
+      "d": null,
+      "a": {
+        "cgt": {
+          "events": [
+            {
+              "asset": "ABC shares",
+              "bought": "2025-03-01",
+              "costBase": 10000,
+              "sold": "2026-07-06",
+              "proceeds": 13775
+            },
+            {
+              "asset": "Quick flip",
+              "bought": "2026-04-01",
+              "costBase": 2000,
+              "sold": "2026-07-02",
+              "proceeds": 2500
+            },
+            {
+              "asset": "Loser",
+              "bought": "2026-01-10",
+              "costBase": 5000,
+              "sold": "2026-07-10",
+              "proceeds": 4000
+            }
+          ]
+        }
+      },
+      "expect": {
+        "netCapitalGain": 1637.5
+      },
+      "expectCgt": {
+        "discountGains": 3775,
+        "otherGains": 500,
+        "yearLosses": 1000,
+        "lossesApplied": 1000,
+        "discount": 1637.5,
+        "net": 1637.5
+      }
+    },
+    {
+      "id": "f4",
+      "name": "CGT: carried-forward loss, missing cost base, exact anniversary",
+      "working": [
+        "carried-forward loss 4,000 against the ABC gain 3,775: 3,775 - 3,775 = 0 applied, 225 left to carry; net 0",
+        "a row with proceeds but no cost base gives a cgt-costbase warning and is not counted",
+        "held test: bought 1 Mar 2025 sold 1 Mar 2026 is NOT over 12 months (purchase and sale days do not count); sold 2 Mar 2026 is"
+      ],
+      "d": null,
+      "a": {
+        "salary": 1,
+        "cgt": {
+          "carriedLoss": 4000,
+          "events": [
+            {
+              "asset": "ABC shares",
+              "bought": "2025-03-01",
+              "costBase": 10000,
+              "sold": "2026-07-06",
+              "proceeds": 13775
+            },
+            {
+              "asset": "12 Sample Street, Sampleton",
+              "bought": "",
+              "costBase": null,
+              "sold": "",
+              "proceeds": null
+            },
+            {
+              "asset": "Mystery",
+              "bought": "2026-02-01",
+              "costBase": "",
+              "sold": "2026-08-01",
+              "proceeds": 9000
+            }
+          ]
+        }
+      },
+      "expect": {
+        "netCapitalGain": 0
+      },
+      "expectCgt": {
+        "lossesApplied": 3775,
+        "lossToCarry": 225,
+        "net": 0
+      },
+      "expectWarnings": [
+        "cgt-costbase",
+        "cgt-loss-carry"
+      ],
+      "expectRows": [
+        {
+          "missingCostBase": false
+        },
+        {
+          "missingCostBase": true,
+          "gain": null
+        },
+        {
+          "missingCostBase": true,
+          "gain": null
+        }
+      ],
+      "heldChecks": [
+        {
+          "bought": "2025-03-01",
+          "sold": "2026-03-01",
+          "expect": false
+        },
+        {
+          "bought": "2025-03-01",
+          "sold": "2026-03-02",
+          "expect": true
+        },
+        {
+          "bought": "2025-03-01",
+          "sold": "2026-07-06",
+          "expect": true
+        },
+        {
+          "bought": "2026-01-10",
+          "sold": "2026-07-10",
+          "expect": false
+        }
+      ]
+    },
+    {
+      "id": "g",
+      "name": "standard deduction: work-related rows 400, salary 90,000, toggle default on",
+      "working": [
+        "work-related rows = Other Work-Related 250 + Home Office 150 = 400, under 1,000, and salary 90,000 > 0, so the default is ON",
+        "workbookDeductions = 1,000 (the 400 is replaced) + Cost of Managing Tax Affairs 300 = 1,300",
+        "taxable = 90,000 - 1,300 = 88,700; tax = 4,020 + 0.3 x 43,700 = 17,130; LITO 0; Medicare 2% = 1,774; total 18,904; result = 20,000 - 18,904 = 1,096"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Other Work-Related Expenses (e.g., tools, equipment, software)",
+            "total": 250
+          },
+          {
+            "section": "ptr",
+            "label": "Home Office Expenses (e.g., electricity, internet, phone)",
+            "total": 150
+          },
+          {
+            "section": "ptr",
+            "label": "Cost of Managing Tax Affairs (e.g., tax agent fees)",
+            "total": 300
+          }
+        ]
+      },
+      "a": {
+        "salary": 90000,
+        "paygWithheld": 20000,
+        "hospitalCover": true
+      },
+      "expect": {
+        "standardDeductionOn": true,
+        "workRelatedTotal": 400,
+        "workbookDeductions": 1300,
+        "taxableIncome": 88700,
+        "incomeTax": 17130,
+        "medicareLevy": 1774,
+        "result": 1096
+      },
+      "expectWarnings": [
+        "standard-deduction"
+      ],
+      "defaultCheck": true,
+      "also": {
+        "a": {
+          "salary": 90000,
+          "paygWithheld": 20000,
+          "hospitalCover": true,
+          "useStandardDeduction": false
+        },
+        "expect": {
+          "standardDeductionOn": false,
+          "workbookDeductions": 700,
+          "taxableIncome": 89300
+        }
+      }
+    },
+    {
+      "id": "g2",
+      "name": "standard deduction default off when work-related rows reach 1,000 or there is no salary",
+      "working": [
+        "work-related rows 1,200 (not under 1,000) so the default is OFF and the 1,200 stands: deductions 1,200",
+        "and with rows of 400 but salary 0 the default is OFF too (no labour income), checked through standardDeductionDefault"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Work-Related Travel Expenses (e.g., transport, accommodation for business purposes)",
+            "total": 1200
+          }
+        ]
+      },
+      "a": {
+        "salary": 90000,
+        "paygWithheld": 20000,
+        "hospitalCover": true
+      },
+      "expect": {
+        "standardDeductionOn": false,
+        "workbookDeductions": 1200
+      },
+      "expectNoWarnings": [
+        "standard-deduction"
+      ],
+      "defaultCheck": false,
+      "noSalaryDefault": {
+        "d": {
+          "items": [
+            {
+              "section": "ptr",
+              "label": "Union Fees or Subscriptions to Professional Associations",
+              "total": 400
+            }
+          ]
+        },
+        "a": {
+          "salary": 0,
+          "dividends": 500
+        },
+        "expect": false
+      }
+    },
+    {
+      "id": "h",
+      "name": "HELP cliff warning within 5,000 below 186,051",
+      "working": [
+        "salary 185,000, no workbook, toggle off: taxable 185,000, which is 1,050 under the 186,050 top of the 17% band",
+        "HELP = 9,028 + 0.17 x (185,000 - 129,717) = 9,028 + 0.17 x 55,283 = 9,028 + 9,398.11 = 18,426.11 (under the 50,000 balance)",
+        "warning help-cliff must be present; at 186,051 the repayment would jump to 10% x 186,051 = 18,605.10",
+        "at 180,000 (6,050 under) the warning must NOT appear"
+      ],
+      "d": null,
+      "a": {
+        "salary": 185000,
+        "paygWithheld": 55000,
+        "hospitalCover": true,
+        "useStandardDeduction": false,
+        "help": {
+          "has": true,
+          "balance": 50000
+        }
+      },
+      "expect": {
+        "taxableIncome": 185000,
+        "help": 18426.11
+      },
+      "expectWarnings": [
+        "help-cliff"
+      ],
+      "also": {
+        "a": {
+          "salary": 180000,
+          "paygWithheld": 55000,
+          "hospitalCover": true,
+          "useStandardDeduction": false,
+          "help": {
+            "has": true,
+            "balance": 50000
+          }
+        },
+        "expectNoWarnings": [
+          "help-cliff"
+        ]
+      }
+    },
+    {
+      "id": "h2",
+      "name": "HELP top band: 10% of the whole repayment income",
+      "working": [
+        "salary 190,000, toggle off: taxable 190,000, over 186,050 so the flat 10% applies: HELP = 0.10 x 190,000 = 19,000",
+        "tax = 51,370 exactly at the 190,000 checkpoint; Medicare 3,800; total = 51,370 + 3,800 + 19,000 = 74,170; result = 60,000 - 74,170 = -14,170",
+        "just over the cliff (within 5,000) so help-cliff still warns"
+      ],
+      "d": null,
+      "a": {
+        "salary": 190000,
+        "paygWithheld": 60000,
+        "hospitalCover": true,
+        "useStandardDeduction": false,
+        "help": {
+          "has": true,
+          "balance": 50000
+        }
+      },
+      "expect": {
+        "incomeTax": 51370,
+        "medicareLevy": 3800,
+        "help": 19000,
+        "result": -14170
+      },
+      "expectWarnings": [
+        "help-cliff"
+      ]
+    },
+    {
+      "id": "i",
+      "name": "franking credits: grossed up into income and refunded as a credit",
+      "working": [
+        "salary 60,000, dividends 7,000 cash, franking 3,000: income = 70,000; taxable 70,000",
+        "tax = 4,020 + 0.3 x 25,000 = 11,520; LITO 0 (over 66,667); Medicare 1,400",
+        "total = 11,520 + 1,400 - 3,000 franking offset = 9,920; result = 12,000 - 9,920 = 2,080"
+      ],
+      "d": null,
+      "a": {
+        "salary": 60000,
+        "dividends": 7000,
+        "franking": 3000,
+        "paygWithheld": 12000,
+        "hospitalCover": true,
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "otherIncome": 70000,
+        "taxableIncome": 70000,
+        "incomeTax": 11520,
+        "lito": 0,
+        "medicareLevy": 1400,
+        "frankingOffset": 3000,
+        "totalLiability": 9920,
+        "result": 2080
+      }
+    },
+    {
+      "id": "j",
+      "name": "union fees are claimed on top of the standard deduction, never replaced by it",
+      "working": [
+        "work-related rows = Other Work-Related 250 + Home Office 150 = 400 (the Union Fees row 400 is not work-related for this test), under 1,000 with salary 90,000, so the default is ON",
+        "workbookDeductions = 1,000 + union fees 400 = 1,400; taxable = 90,000 - 1,400 = 88,600",
+        "tax = 4,020 + 0.3 x 43,600 = 17,100; Medicare 2% = 1,772; total 18,872; result = 0 - 18,872 = -18,872",
+        "with the toggle off the itemised rows stand: 400 + 400 = 800, taxable 89,200"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Other Work-Related Expenses (e.g., tools, equipment, software)",
+            "total": 250
+          },
+          {
+            "section": "ptr",
+            "label": "Home Office Expenses (e.g., electricity, internet, phone)",
+            "total": 150
+          },
+          {
+            "section": "ptr",
+            "label": "Union Fees or Subscriptions to Professional Associations",
+            "total": 400
+          }
+        ]
+      },
+      "a": {
+        "salary": 90000,
+        "paygWithheld": 0,
+        "hospitalCover": true
+      },
+      "expect": {
+        "standardDeductionOn": true,
+        "workRelatedTotal": 400,
+        "workbookDeductions": 1400,
+        "taxableIncome": 88600,
+        "incomeTax": 17100,
+        "medicareLevy": 1772,
+        "totalLiability": 18872,
+        "result": -18872
+      },
+      "expectWarnings": [
+        "standard-deduction"
+      ],
+      "defaultCheck": true,
+      "also": {
+        "a": {
+          "salary": 90000,
+          "paygWithheld": 0,
+          "hospitalCover": true,
+          "useStandardDeduction": false
+        },
+        "expect": {
+          "standardDeductionOn": false,
+          "workbookDeductions": 800,
+          "taxableIncome": 89200
+        }
+      }
+    },
+    {
+      "id": "j2",
+      "name": "union fees do not count toward the 1,000 cap in the default test",
+      "working": [
+        "Other Work-Related 700 + Union Fees 400: the work-related total for the cap is 700 (under 1,000), so the default is ON",
+        "deductions = max(700, 1,000) + 400 union = 1,400; taxable 90,000 - 1,400 = 88,600",
+        "toggle off: 700 + 400 = 1,100, taxable 88,900"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Other Work-Related Expenses (e.g., tools, equipment, software)",
+            "total": 700
+          },
+          {
+            "section": "ptr",
+            "label": "Union Fees or Subscriptions to Professional Associations",
+            "total": 400
+          }
+        ]
+      },
+      "a": {
+        "salary": 90000,
+        "paygWithheld": 0,
+        "hospitalCover": true
+      },
+      "expect": {
+        "standardDeductionOn": true,
+        "workRelatedTotal": 700,
+        "workbookDeductions": 1400,
+        "taxableIncome": 88600
+      },
+      "defaultCheck": true,
+      "also": {
+        "a": {
+          "salary": 90000,
+          "paygWithheld": 0,
+          "hospitalCover": true,
+          "useStandardDeduction": false
+        },
+        "expect": {
+          "standardDeductionOn": false,
+          "workbookDeductions": 1100,
+          "taxableIncome": 88900
+        }
+      }
+    },
+    {
+      "id": "k",
+      "name": "personal super is added back to HELP repayment income",
+      "working": [
+        "salary 150,000 less personal super 20,000: taxable 130,000; tax = 4,020 + 0.3 x 85,000 = 29,520; Medicare 2,600",
+        "repayment income = 130,000 + 20,000 super = 150,000 (rates.help.incomeBasis: reportable super contributions are added back)",
+        "HELP = 9,028 + 0.17 x (150,000 - 129,717) = 9,028 + 0.17 x 20,283 = 9,028 + 3,448.11 = 12,476.11, under the 60,000 balance"
+      ],
+      "d": null,
+      "a": {
+        "salary": 150000,
+        "super": 20000,
+        "paygWithheld": 0,
+        "hospitalCover": true,
+        "useStandardDeduction": false,
+        "help": {
+          "has": true,
+          "balance": 60000
+        }
+      },
+      "expect": {
+        "taxableIncome": 130000,
+        "incomeTax": 29520,
+        "medicareLevy": 2600,
+        "helpIncome": 150000,
+        "help": 12476.11
+      },
+      "expectWarnings": [
+        "help-basis"
+      ]
+    },
+    {
+      "id": "k2",
+      "name": "personal super is added back for the surcharge tier; the surcharge is still charged on taxable income",
+      "working": [
+        "salary 130,000 less personal super 30,000: taxable 100,000",
+        "income for surcharge purposes = 100,000 + 30,000 = 130,000: tier 2 (123,001 to 164,000) at 1.25%",
+        "surcharge = 1.25% x taxable 100,000 = 1,250; 130,000 is 7,000 past the 123,000 edge so no boundary warning"
+      ],
+      "d": null,
+      "a": {
+        "salary": 130000,
+        "super": 30000,
+        "paygWithheld": 0,
+        "hospitalCover": false,
+        "family": {
+          "status": "single"
+        },
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "taxableIncome": 100000,
+        "mlsIncome": 130000,
+        "mlsTier": 2,
+        "mls": 1250
+      },
+      "expectWarnings": [
+        "mls-basis"
+      ],
+      "expectNoWarnings": [
+        "mls-boundary"
+      ]
+    },
+    {
+      "id": "l",
+      "name": "net rental loss is added back for the surcharge and HELP tests",
+      "working": [
+        "workbook: Rental Income 39,000, Interest on Loans 55,000 (investment property): net rental loss 16,000",
+        "taxable = 116,000 salary + 39,000 - 55,000 = 100,000",
+        "surcharge income = 100,000 + 16,000 = 116,000: tier 1 (105,001 to 123,000) at 1% on taxable 100,000 = 1,000",
+        "HELP income 116,000: 0.15 x (116,000 - 69,528) = 0.15 x 46,472 = 6,970.80 (under the 100,000 balance)"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "income",
+            "label": "Rental Income",
+            "total": 39000
+          },
+          {
+            "section": "ip",
+            "label": "Interest on Loans (e.g., mortgage interest)",
+            "total": 55000
+          }
+        ]
+      },
+      "a": {
+        "salary": 116000,
+        "paygWithheld": 0,
+        "hospitalCover": false,
+        "family": {
+          "status": "single"
+        },
+        "useStandardDeduction": false,
+        "help": {
+          "has": true,
+          "balance": 100000
+        }
+      },
+      "expect": {
+        "taxableIncome": 100000,
+        "netRentalLoss": 16000,
+        "mlsIncome": 116000,
+        "mlsTier": 1,
+        "mls": 1000,
+        "helpIncome": 116000,
+        "help": 6970.8
+      },
+      "expectWarnings": [
+        "mls-basis",
+        "help-basis"
+      ]
+    },
+    {
+      "id": "m",
+      "name": "CGT: a gain with no dates is counted in full and warned, not silently",
+      "working": [
+        "Sample Street: cost base 450,000, proceeds 650,000, no bought or sold date: gain 200,000, held test unknown, so no discount and a cgt-dates warning",
+        "taxable = 120,000 + 200,000 = 320,000; tax = 51,370 + 0.45 x 130,000 = 109,870; Medicare 6,400",
+        "with bought 10 May 2021 and sold 15 Nov 2026 the discount applies: net 100,000, taxable 220,000, no cgt-dates warning"
+      ],
+      "d": null,
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 0,
+        "hospitalCover": true,
+        "useStandardDeduction": false,
+        "cgt": {
+          "events": [
+            {
+              "asset": "12 Sample Street, Sampleton",
+              "bought": "",
+              "costBase": 450000,
+              "sold": "",
+              "proceeds": 650000
+            }
+          ]
+        }
+      },
+      "expect": {
+        "netCapitalGain": 200000,
+        "taxableIncome": 320000,
+        "incomeTax": 109870,
+        "medicareLevy": 6400
+      },
+      "expectWarnings": [
+        "cgt-dates"
+      ],
+      "expectNoWarnings": [
+        "cgt-costbase"
+      ],
+      "expectRows": [
+        {
+          "gain": 200000,
+          "heldOver12Months": null,
+          "discountApplies": false
+        }
+      ],
+      "also": {
+        "a": {
+          "salary": 120000,
+          "paygWithheld": 0,
+          "hospitalCover": true,
+          "useStandardDeduction": false,
+          "cgt": {
+            "events": [
+              {
+                "asset": "12 Sample Street, Sampleton",
+                "bought": "2021-05-10",
+                "costBase": 450000,
+                "sold": "2026-11-15",
+                "proceeds": 650000
+              }
+            ]
+          }
+        },
+        "expect": {
+          "netCapitalGain": 100000,
+          "taxableIncome": 220000
+        },
+        "expectNoWarnings": [
+          "cgt-dates"
+        ]
+      }
+    },
+    {
+      "id": "n",
+      "name": "reportable super: the workbook PTR personal super row is added back for HELP and the surcharge",
+      "working": [
+        "PTR row Personal Superannuation Contributions 10,000 is a deduction (taxable = 150,000 - 10,000 = 140,000) and a reportable super contribution for the add-backs",
+        "tax = 31,020 + 0.37 x (140,000 - 135,000) = 31,020 + 1,850 = 32,870; Medicare 2% x 140,000 = 2,800",
+        "repayment income = 140,000 + 10,000 = 150,000: HELP = 9,028 + 0.17 x (150,000 - 129,717) = 9,028 + 3,448.11 = 12,476.11 (same as case k, which puts the 10,000 in the sheet instead)",
+        "addBacks 10,000; ptrSuper 10,000; nothing from the sheet's super field"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Personal Superannuation Contributions (where eligible for deduction)",
+            "total": 10000
+          }
+        ]
+      },
+      "a": {
+        "salary": 150000,
+        "paygWithheld": 0,
+        "hospitalCover": true,
+        "useStandardDeduction": false,
+        "help": {
+          "has": true,
+          "balance": 60000
+        }
+      },
+      "expect": {
+        "taxableIncome": 140000,
+        "incomeTax": 32870,
+        "medicareLevy": 2800,
+        "ptrSuper": 10000,
+        "addBacks": 10000,
+        "helpIncome": 150000,
+        "help": 12476.11,
+        "workbookDeductions": 10000
+      },
+      "expectWarnings": [
+        "help-basis"
+      ]
+    },
+    {
+      "id": "o",
+      "name": "standard deduction capped at labour income: salary 600, rows 250",
+      "working": [
+        "salary 600 and dividends 5,000; work-related row 250 is under 1,000 with salary > 0 so the default is ON",
+        "standard amount = min(1,000, salary 600) = 600; work-related used = max(250, 600) = 600 (the ATO reduces the standard amount dollar for dollar by actual claims, so it never lowers a bigger itemised claim)",
+        "workbookDeductions 600; taxable = 600 + 5,000 - 600 = 5,000; tax 0 (under 18,200); result 0"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Other Work-Related Expenses (e.g., tools, equipment, software)",
+            "total": 250
+          }
+        ]
+      },
+      "a": {
+        "salary": 600,
+        "dividends": 5000,
+        "paygWithheld": 0,
+        "hospitalCover": true
+      },
+      "expect": {
+        "standardDeductionOn": true,
+        "standardDeductionAmount": 600,
+        "workRelatedUsed": 600,
+        "standardReplaced": true,
+        "workRelatedTotal": 250,
+        "workbookDeductions": 600,
+        "taxableIncome": 5000,
+        "incomeTax": 0,
+        "result": 0
+      },
+      "expectWarnings": [
+        "standard-deduction"
+      ]
+    },
+    {
+      "id": "o2",
+      "name": "standard deduction forced on never lowers a bigger itemised claim",
+      "working": [
+        "work-related row 1,200 with the toggle forced ON: standard amount = min(1,000, 90,000) = 1,000, used = max(1,200, 1,000) = 1,200, so the rows stand and standardReplaced is false",
+        "workbookDeductions 1,200; taxable = 90,000 - 1,200 = 88,800; tax = 4,020 + 0.3 x 43,800 = 4,020 + 13,140 = 17,160; Medicare 2% = 1,776; total 18,936; result = 20,000 - 18,936 = 1,064"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Other Work-Related Expenses (e.g., tools, equipment, software)",
+            "total": 1200
+          }
+        ]
+      },
+      "a": {
+        "salary": 90000,
+        "paygWithheld": 20000,
+        "hospitalCover": true,
+        "useStandardDeduction": true
+      },
+      "expect": {
+        "standardDeductionOn": true,
+        "standardDeductionAmount": 1000,
+        "workRelatedUsed": 1200,
+        "standardReplaced": false,
+        "workbookDeductions": 1200,
+        "taxableIncome": 88800,
+        "incomeTax": 17160,
+        "medicareLevy": 1776,
+        "result": 1064
+      },
+      "expectWarnings": [
+        "standard-deduction"
+      ]
+    },
+    {
+      "id": "p",
+      "name": "offset and rebate rows in the PTR block are not deductions",
+      "working": [
+        "PTR rows: LITO 700, Private Health Insurance Rebate 400, Superannuation Co-Contribution 500 (offsets, not deductions: 1,600 in notDeductions) and Cost of Managing Tax Affairs 300 (a deduction)",
+        "workbookDeductions = 300 only; taxable = 90,000 - 300 = 89,700; tax = 4,020 + 0.3 x 44,700 = 4,020 + 13,410 = 17,430; Medicare 2% = 1,794; total 19,224; result = 20,000 - 19,224 = 776"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "ptr",
+            "label": "Low Income Tax Offset (LITO)",
+            "total": 700
+          },
+          {
+            "section": "ptr",
+            "label": "Private Health Insurance Rebate",
+            "total": 400
+          },
+          {
+            "section": "ptr",
+            "label": "Superannuation Co-Contribution",
+            "total": 500
+          },
+          {
+            "section": "ptr",
+            "label": "Cost of Managing Tax Affairs (e.g., tax agent fees)",
+            "total": 300
+          }
+        ]
+      },
+      "a": {
+        "salary": 90000,
+        "paygWithheld": 20000,
+        "hospitalCover": true,
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "notDeductions": 1600,
+        "workbookDeductions": 300,
+        "taxableIncome": 89700,
+        "incomeTax": 17430,
+        "medicareLevy": 1794,
+        "result": 776
+      }
+    },
+    {
+      "id": "q",
+      "name": "net rental loss counts an investment property row recorded in the PTR block",
+      "working": [
+        "Rental Income 39,000; Interest on Loans 50,000 (IP section) and Investment Property Expenses 5,000 (PTR block): rental deductions 55,000, net rental loss 16,000",
+        "taxable = 116,000 + 39,000 - 50,000 - 5,000 = 100,000 (same as case l, which has the whole 55,000 in the IP section)",
+        "surcharge income = 100,000 + 16,000 = 116,000: tier 1 at 1% on taxable 100,000 = 1,000; HELP income 116,000: 0.15 x (116,000 - 69,528) = 6,970.80"
+      ],
+      "d": {
+        "items": [
+          {
+            "section": "income",
+            "label": "Rental Income",
+            "total": 39000
+          },
+          {
+            "section": "ip",
+            "label": "Interest on Loans (e.g., mortgage interest)",
+            "total": 50000
+          },
+          {
+            "section": "ptr",
+            "label": "Investment Property Expenses (e.g., loan interest, rates, repairs)",
+            "total": 5000
+          }
+        ]
+      },
+      "a": {
+        "salary": 116000,
+        "paygWithheld": 0,
+        "hospitalCover": false,
+        "family": {
+          "status": "single"
+        },
+        "useStandardDeduction": false,
+        "help": {
+          "has": true,
+          "balance": 100000
+        }
+      },
+      "expect": {
+        "taxableIncome": 100000,
+        "netRentalLoss": 16000,
+        "mlsIncome": 116000,
+        "mlsTier": 1,
+        "mls": 1000,
+        "helpIncome": 116000,
+        "help": 6970.8
+      },
+      "expectWarnings": [
+        "mls-basis",
+        "help-basis"
+      ]
+    },
+    {
+      "id": "r",
+      "name": "surcharge family test: dependent children make it a family even when the status says single",
+      "working": [
+        "salary 170,000, no hospital cover, status single but 1 dependent child: family table (one child adds nothing), 170,000 is under 210,000 so tier 0 and no surcharge",
+        "with no children the single table applies: 170,000 is over 164,000, tier 3 at 1.5% x 170,000 = 2,550"
+      ],
+      "d": null,
+      "a": {
+        "salary": 170000,
+        "paygWithheld": 0,
+        "hospitalCover": false,
+        "family": {
+          "status": "single",
+          "children": 1
+        },
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "isFamily": true,
+        "mlsTier": 0,
+        "mls": 0
+      },
+      "expectNoWarnings": [
+        "mls-boundary"
+      ],
+      "also": {
+        "a": {
+          "salary": 170000,
+          "paygWithheld": 0,
+          "hospitalCover": false,
+          "family": {
+            "status": "single",
+            "children": 0
+          },
+          "useStandardDeduction": false
+        },
+        "expect": {
+          "isFamily": false,
+          "mlsTier": 3,
+          "mls": 2550
+        }
+      }
+    },
+    {
+      "id": "s",
+      "name": "marginal rate is the whole chain re-run at one dollar more: LITO taper and the HELP cliff",
+      "working": [
+        "taxable 40,000: tax = 0.15 x 21,800 = 3,270; LITO = 700 - 0.05 x (40,000 - 37,500) = 575; Medicare 2% x 40,000 = 800 (the 10% phase-in would be 1,198.90, more, so the full levy applies)",
+        "at 40,001: tax +0.15, LITO -0.05 (so +0.05 to pay), Medicare +0.02: marginal = 0.15 + 0.05 + 0.02 = 0.22 (a bracket-only reading would say 0.17)",
+        "also: taxable 186,050 with HELP: repayment = 9,028 + 0.17 x (186,050 - 129,717) = 9,028 + 9,576.61 = 18,604.61; at 186,051 the flat 10% gives 18,605.10, a step of 0.49",
+        "marginal there = 0.37 + 0.02 + 0.49 = 0.88; tax at 186,050 = 31,020 + 0.37 x 51,050 = 49,908.50"
+      ],
+      "d": null,
+      "a": {
+        "salary": 40000,
+        "paygWithheld": 0,
+        "hospitalCover": true,
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "incomeTax": 3270,
+        "lito": 575,
+        "medicareLevy": 800,
+        "marginal": 0.22
+      },
+      "also": {
+        "a": {
+          "salary": 186050,
+          "paygWithheld": 0,
+          "hospitalCover": true,
+          "useStandardDeduction": false,
+          "help": {
+            "has": true,
+            "balance": 100000
+          }
+        },
+        "expect": {
+          "incomeTax": 49908.5,
+          "help": 18604.61,
+          "marginal": 0.88
+        },
+        "expectWarnings": [
+          "help-cliff"
+        ]
+      }
+    },
+    {
+      "id": "t",
+      "name": "hospital cover not answered: the surcharge is included and a warning says so",
+      "working": [
+        "salary 120,000, hospitalCover missing (null): treated as no cover, single table: 120,000 is in tier 1 (105,001 to 123,000) at 1% = 1,200, and the hospital-unanswered warning fires",
+        "123,000 - 120,000 = 3,000 so the mls-boundary warning fires too",
+        "also: an explicit false gives the same 1,200 without the hospital-unanswered warning"
+      ],
+      "d": null,
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 0,
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "hospitalCover": false,
+        "hospitalUnanswered": true,
+        "mlsTier": 1,
+        "mls": 1200
+      },
+      "expectWarnings": [
+        "hospital-unanswered",
+        "mls-boundary"
+      ],
+      "also": {
+        "a": {
+          "salary": 120000,
+          "paygWithheld": 0,
+          "hospitalCover": false,
+          "useStandardDeduction": false
+        },
+        "expect": {
+          "hospitalUnanswered": false,
+          "mls": 1200
+        },
+        "expectNoWarnings": [
+          "hospital-unanswered"
+        ]
+      }
+    },
+    {
+      "id": "t2",
+      "name": "hospital cover answered yes: no surcharge and no warning",
+      "working": [
+        "same as t with hospitalCover true: mls 0, mlsTier null, no hospital-unanswered warning"
+      ],
+      "d": null,
+      "a": {
+        "salary": 120000,
+        "paygWithheld": 0,
+        "hospitalCover": true,
+        "useStandardDeduction": false
+      },
+      "expect": {
+        "hospitalCover": true,
+        "hospitalUnanswered": false,
+        "mls": 0,
+        "mlsTier": null
+      },
+      "expectNoWarnings": [
+        "hospital-unanswered",
+        "mls-boundary"
+      ]
+    }
+  ]
+}

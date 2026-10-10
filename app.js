@@ -9,7 +9,7 @@ const AUTH = 'https://login.microsoftonline.com/consumers/oauth2/v2.0';
 const SCOPES = 'Files.ReadWrite offline_access';
 const DEFAULTS = { rootPath: 'Personal Documents/Tax/Tax27', receiptsFolder: 'Receipts', workbook: 'PTR Calculations 27.xlsx' };
 const LOCK_AFTER_MS = 2 * 60 * 1000;
-const APP_VERSION = '13';
+const APP_VERSION = '16';
 const MAX_UPLOAD = 100 * 1024 * 1024;
 
 const $ = (id) => document.getElementById(id);
@@ -217,6 +217,10 @@ const state = {
   dirty: false,       // a receipt was saved, so the listing is stale
   pending: null,      // {blob, ext, name, previewUrl}
   saving: false,
+  rates: null,        // rates.json, loaded once per open
+  ratesError: '',
+  assume: { data: ls.get('assumptions'), draft: null, etag: '', loaded: false, busy: false, saving: false, error: '' },
+  vehicle: undefined, // mileage summary from Inbox/vehicle.json; undefined = not fetched yet
 };
 const current = () => state.stack[state.stack.length - 1];
 
@@ -363,6 +367,7 @@ async function openRoot() {
   state.position = ls.get('snapshot');
   show('home');
   renderHome();
+  loadRates().then(() => { if (state.tab === 'home') renderHome(); });
   try {
     const root = await graph('/me/drive/root:/' + encodePath(cfg().rootPath));
     if (!root.folder) throw new Error(`"${cfg().rootPath}" is not a folder.`);
@@ -371,6 +376,7 @@ async function openRoot() {
     renderHome();
     refreshPosition();
     loadInbox();
+    loadAssumptions();
   } catch (e) {
     if (e instanceof AuthError) return needSignIn();
     state.stack = [];
@@ -502,6 +508,63 @@ async function onPicked(file) {
     updateNamePreview();
     if (!$('f-vendor').value) $('f-vendor').focus({ preventScroll: true });
   } catch (e) { banner(friendly(e)); }
+}
+
+/* ---- paste a receipt ------------------------------------------------------
+   Two routes, because browsers differ: the paste event (⌘V) carries the file
+   directly, while the button has to ask for the clipboard and needs a gesture. */
+const PASTEABLE = (t) => /^image\/(png|jpe?g|webp|heic|heif|tiff|bmp)$/i.test(t) || t === 'application/pdf';
+
+function pastedName(type) {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  const ext = type === 'application/pdf' ? 'pdf' : (type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+  return `Pasted ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}.${ext}`;
+}
+
+async function acceptPaste(file) {
+  if (!file) { toast('Nothing on the clipboard I can read. Copy an image or a PDF first.'); return false; }
+  if (!PASTEABLE(file.type)) { toast(`Can't use ${file.type || 'that'} — copy an image or a PDF.`); return false; }
+  if (state.tab !== 'add') { $('tab-add').click(); }
+  document.body.classList.add('pasting');
+  try { await onPicked(file); } finally { document.body.classList.remove('pasting'); }
+  return true;
+}
+
+/* ⌘V anywhere in the app, as long as focus isn't in a text field */
+async function onPasteEvent(e) {
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  const dt = e.clipboardData;
+  if (!dt) return;
+  let file = [...(dt.files || [])].find((f) => PASTEABLE(f.type));
+  if (!file) {
+    const item = [...(dt.items || [])].find((i) => i.kind === 'file' && PASTEABLE(i.type));
+    if (item) file = item.getAsFile();
+  }
+  if (!file) return;                      // let normal paste happen
+  e.preventDefault();
+  if (!file.name || file.name === 'image.png') file = new File([file], pastedName(file.type), { type: file.type });
+  await acceptPaste(file);
+}
+
+/* the button: ask the clipboard directly */
+async function pasteFromClipboard() {
+  if (!navigator.clipboard || !navigator.clipboard.read) {
+    toast('This browser won\'t let me open the clipboard — press ⌘V instead.'); return;
+  }
+  try {
+    for (const item of await navigator.clipboard.read()) {
+      const type = item.types.find(PASTEABLE);
+      if (!type) continue;
+      const blob = await item.getType(type);
+      return void acceptPaste(new File([blob], pastedName(type), { type }));
+    }
+    toast('Nothing on the clipboard I can read. Copy an image or a PDF first.');
+  } catch (e) {
+    toast(/denied|permission/i.test(String(e))
+      ? 'Clipboard access was blocked — press ⌘V instead.'
+      : 'Couldn\'t read the clipboard — press ⌘V instead.');
+  }
 }
 
 // Shows a file ready to be saved. For a scan the blob is a PDF and previewBlob is its first page.
@@ -858,6 +921,267 @@ function estimateTax(taxable, fy) {
   return { tax, medicare, total: tax + medicare, effective: t ? (tax + medicare) / t : 0, marginal: marginal + 0.02, next };
 }
 
+/* ---------- refund or bill estimate: rates.json + your assumptions; the maths lives in estimate.js ---------- */
+let ratesPromise;
+// rates.json holds every 2026-27 figure (verified, with sources). If it cannot be read the round-1 card is shown with a note.
+function loadRates() {
+  return (ratesPromise = ratesPromise || fetchT('rates.json?v=' + APP_VERSION, { cache: 'no-cache' }, 15000)
+    .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+    .then((j) => { state.rates = j; state.ratesError = ''; return j; })
+    .catch((e) => { ratesPromise = null; state.ratesError = friendly(e); return null; }));
+}
+const currentEstimate = (d, fy) => (state.rates ? Estimate.estimatePosition(d, state.assume.data, state.rates, fy) : null);
+
+// First-time contents of the sheet: everything blank, plus one capital gains row for each sale the workbook's Key Dates
+// mention ("Sold ... worth $x" on a date), with the proceeds and sale date filled and the cost base left for the user.
+function seededAssumptions(d) {
+  const events = ((d && d.dates) || []).filter((x) => /\b(sold|sale|disposed)\b/i.test(x.label)).map((x, i) => {
+    const amt = /\$\s?([\d,]+(?:\.\d+)?)/.exec(x.label);
+    const asset = x.label.replace(/^\s*sold\s+/i, '').replace(/\s+(worth|for)\s+\$[\d,.]+.*$/i, '').replace(/\s*[,(]?\s*\b(sold|sale|disposed)\b.*$/i, '').trim() || x.label;
+    const dt = new Date(x.date);
+    return { id: 'keydate-' + i, asset, bought: '', costBase: null, sold: Number.isNaN(dt.getTime()) ? '' : dt.toISOString().slice(0, 10),
+      proceeds: amt ? Number(amt[1].replace(/,/g, '')) : null,
+      note: `From the workbook key date "${x.label}". Enter the cost base: what it cost plus buying, improving and selling costs. The contract date is the CGT date.` };
+  });
+  return {
+    version: 1, savedAt: null,
+    salary: null, paygWithheld: null, paygPerPay: null, paysLeft: null,
+    dividends: null, franking: null, interest: null, trust: null, other: null,
+    super: null, incomeProtection: null, useStandardDeduction: null, includeCtr: false,
+    help: { has: false, balance: null }, hospitalCover: null, family: { status: 'single', children: 0, spouseIncome: null },
+    cgt: { carriedLoss: null, events },
+  };
+}
+
+// Inbox/assumptions.json in OneDrive is the record; the `assumptions` cache lets Position render before it arrives.
+// A save that reached the phone but not OneDrive has a newer savedAt than the file (or there is no file yet): that copy wins and is pushed again.
+async function loadAssumptions() {
+  const as = state.assume;
+  as.busy = true;
+  try {
+    const r = await readInboxFile('assumptions.json');
+    if (r) {
+      as.etag = r.etag;
+      const remote = r.text ? JSON.parse(r.text) : null;
+      const local = as.data;
+      const phoneNewer = !!(local && local.savedAt && (!remote || !remote.savedAt || local.savedAt > remote.savedAt));
+      if (phoneNewer) {
+        try { await writeAssumptions(local); toast('Assumptions saved to OneDrive.'); }
+        catch (e) { if (e instanceof AuthError) throw e; toast(`Assumptions are on this phone only. Couldn't save to OneDrive: ${friendly(e)}`); }
+      } else if (remote) { as.data = remote; ls.set('assumptions', remote); }
+    }
+    as.loaded = true; as.error = '';
+  } catch (e) {
+    if (e instanceof AuthError) { as.busy = false; return needSignIn(); }
+    as.error = friendly(e);
+  }
+  as.busy = false;
+  if (state.tab === 'home') renderHome();
+}
+// PUT with If-Match like questions.json; a 404 on the read means the file does not exist yet, so the PUT creates it.
+async function writeAssumptions(data) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await readInboxFile('assumptions.json');
+    if (!r) throw new Error('The Inbox folder is missing in OneDrive.');
+    try {
+      const saved = await graph(`/me/drive/items/${r.folderId}:/assumptions.json:/content`, {
+        method: 'PUT', body: JSON.stringify(data, null, 2),
+        headers: { 'Content-Type': 'application/json', ...(r.etag ? { 'If-Match': r.etag } : {}) },
+      });
+      state.assume.etag = (saved && saved.eTag) || '';
+      return;
+    } catch (e) { if (e.status !== 412 || attempt) throw e; }
+  }
+}
+async function saveAssumptions(data) {
+  const as = state.assume;
+  data.savedAt = isoNow();
+  as.data = data; ls.set('assumptions', data);
+  $('assume').close('save');
+  renderHome();
+  as.saving = true;
+  try { await writeAssumptions(data); toast('Assumptions saved to OneDrive.'); }
+  catch (e) {
+    if (e instanceof AuthError) { as.saving = false; return needSignIn(); }
+    toast(`Saved on this phone. Couldn't save to OneDrive: ${friendly(e)}`);
+  }
+  as.saving = false;
+}
+
+/* ----- the Assumptions sheet ----- */
+const ASSUME_OFFLINE_NOTE = 'Assumptions are from this phone; OneDrive could not be read.';
+const numField = (id) => Estimate.num($(id).value);
+const setNum = (id, v) => { $(id).value = v == null ? '' : String(v); };
+function openAssumptions() {
+  const as = state.assume, d = state.position && state.position.data, rates = state.rates;
+  const a = as.draft = JSON.parse(JSON.stringify(as.data || seededAssumptions(state.position && state.position.data)));
+  for (const [id, k] of [['a-salary', 'salary'], ['a-payg', 'paygWithheld'], ['a-perpay', 'paygPerPay'], ['a-paysleft', 'paysLeft'], ['a-dividends', 'dividends'], ['a-franking', 'franking'],
+    ['a-interest', 'interest'], ['a-trust', 'trust'], ['a-other', 'other'], ['a-super', 'super'], ['a-ip', 'incomeProtection']]) setNum(id, a[k]);
+  $('a-ctr').checked = !!a.includeCtr;
+  $('a-help').checked = !!(a.help && a.help.has); setNum('a-help-balance', a.help && a.help.balance);
+  $('a-hospital').checked = a.hospitalCover === true; $('a-hospital').dataset.touched = '';
+  $('a-family').value = a.family && a.family.status === 'family' ? 'family' : 'single';
+  setNum('a-children', a.family && a.family.children); setNum('a-spouse', a.family && a.family.spouseIncome);
+  setNum('a-carried', a.cgt && a.cgt.carriedLoss);
+  delete $('a-std').dataset.touched;
+  /* the workbook's work-related rows, and what the standard deduction would replace */
+  const parts = Estimate.workbookParts(d);
+  const wr = $('a-wr'); wr.replaceChildren();
+  if (parts.workRelated.length) {
+    wr.append(h('p', { class: 'note', style: 'margin-bottom:4px' }, 'Work-related rows in the workbook'));
+    for (const it of parts.workRelated) wr.append(kv(shortLabel(it.label), money(it.total, true)));
+    wr.append(kv('Work-related total', money(parts.workRelated.reduce((s, i) => s + i.total, 0), true), 'total'));
+  } else wr.append(h('p', { class: 'note' }, 'No work-related rows in the workbook yet.'));
+  if (rates) {
+    $('a-std-label').textContent = `Use the ${money(rates.standardDeduction.max)} standard deduction instead`;
+    $('a-std-note').textContent = `For work-related expenses with no receipts, when you have salary or director fees. The default is on when the workbook's work-related rows are under ${money(rates.standardDeduction.max)}.`;
+  }
+  const ctrTotal = parts.ctr.reduce((s, i) => s + i.total, 0);
+  $('a-ctr-total').textContent = ctrTotal ? `Currently ${money(ctrTotal, true)} is left out.` : 'Nothing recorded there yet.';
+  $('a-status').textContent = as.error ? ASSUME_OFFLINE_NOTE : '';
+  $('a-status').hidden = !as.error;
+  refreshAssumptionsSheet();
+  renderCgtRows();
+  $('assume').showModal();
+  $('assume').focus();   // the dialog itself, not the first field, so the keyboard does not pop on open
+  $('assume').scrollTop = 0;
+}
+// Live bits of the sheet: the projected PAYG total, the standard-deduction default, which fields apply.
+function refreshAssumptionsSheet() {
+  const d = state.position && state.position.data, rates = state.rates;
+  $('a-payg-total').textContent = money(Estimate.projectedPayg({ paygWithheld: numField('a-payg'), paygPerPay: numField('a-perpay'), paysLeft: numField('a-paysleft') }), true);
+  const a = state.assume.draft || {};
+  if (rates && !$('a-std').dataset.touched) $('a-std').checked = a.useStandardDeduction == null ? Estimate.standardDeductionDefault(d, { salary: numField('a-salary') }, rates) : !!a.useStandardDeduction;
+  $('a-help-balance-wrap').hidden = !$('a-help').checked;
+  $('a-spouse-wrap').hidden = $('a-family').value !== 'family';
+}
+function blankEvent() { return { id: 'ev-' + Date.now().toString(36), asset: '', bought: '', costBase: null, sold: '', proceeds: null, note: '' }; }
+function renderCgtRows() {
+  const box = $('a-cgt-rows'), a = state.assume.draft, rates = state.rates;
+  box.replaceChildren();
+  a.cgt = a.cgt || { carriedLoss: null, events: [] };
+  if (!a.cgt.events.length) box.append(h('p', { class: 'note' }, 'No capital gains events. Add one for each asset sold this year.'));
+  a.cgt.events.forEach((ev, i) => {
+    const calc = h('div', { class: 'cgt-calc' });
+    const update = () => {
+      calc.replaceChildren();
+      if (!rates) return;
+      const row = Estimate.cgtRow(ev, rates);
+      if (row.gain == null) { calc.append(h('span', { class: 'pill warn' }, row.missingCostBase ? 'Cost base missing' : 'Proceeds missing')); return; }
+      calc.append(h('b', {}, `${row.gain >= 0 ? 'Gain' : 'Loss'} ${money(Math.abs(row.gain), true)}`));
+      if (row.heldOver12Months != null) calc.append(h('span', { class: 'pill' + (row.heldOver12Months ? '' : ' warn') }, row.heldOver12Months ? 'Held over 12 months' : 'Held under 12 months'));
+      calc.append(h('span', { class: 'pill' + (row.discountApplies ? '' : ' warn') }, row.discountApplies ? `${pct(rates.cgt.discount)} discount applies` : row.gain > 0 && row.heldOver12Months == null ? 'Enter both dates for the discount test' : 'No discount'));
+    };
+    const field = (label, key, type, extra = {}) => h('label', { class: 'field' }, label,
+      h('input', { type, value: ev[key] == null ? '' : String(ev[key]), autocomplete: 'off', ...extra,
+        oninput: (e) => { ev[key] = type === 'date' || key === 'asset' ? e.target.value : Estimate.num(e.target.value); if (key !== 'asset') update(); } }));
+    update();
+    box.append(h('div', { class: 'cgt-row' },
+      field('Asset', 'asset', 'text', { placeholder: 'e.g. ABC shares' }),
+      h('div', { class: 'row2' }, field('Bought', 'bought', 'date'), field('Cost base ($)', 'costBase', 'text', { inputmode: 'decimal', placeholder: '0.00' })),
+      h('div', { class: 'row2' }, field('Sold (contract date)', 'sold', 'date'), field('Proceeds ($)', 'proceeds', 'text', { inputmode: 'decimal', placeholder: '0.00' })),
+      ev.note ? h('p', { class: 'note' }, ev.note) : null,
+      h('div', { class: 'cgt-foot' }, calc, h('button', { class: 'btn', type: 'button', onclick: () => { a.cgt.events.splice(i, 1); renderCgtRows(); } }, 'Remove'))));
+  });
+}
+function collectAssumptions() {
+  const a = state.assume.draft;
+  const touched = !!$('a-std').dataset.touched;
+  return {
+    ...a, version: 1,
+    salary: numField('a-salary'), paygWithheld: numField('a-payg'), paygPerPay: numField('a-perpay'), paysLeft: numField('a-paysleft'),
+    dividends: numField('a-dividends'), franking: numField('a-franking'), interest: numField('a-interest'), trust: numField('a-trust'), other: numField('a-other'),
+    super: numField('a-super'), incomeProtection: numField('a-ip'),
+    useStandardDeduction: touched ? $('a-std').checked : a.useStandardDeduction == null ? null : $('a-std').checked,
+    includeCtr: $('a-ctr').checked,
+    help: { has: $('a-help').checked, balance: numField('a-help-balance') },
+    hospitalCover: $('a-hospital').dataset.touched ? $('a-hospital').checked : a.hospitalCover,   // null stays null until the box is touched
+    family: { status: $('a-family').value, children: numField('a-children') || 0, spouseIncome: numField('a-spouse') },
+    cgt: { carriedLoss: numField('a-carried'), events: (a.cgt && a.cgt.events) || [] },
+  };
+}
+function wireAssumptions() {
+  for (const id of ['a-payg', 'a-perpay', 'a-paysleft', 'a-salary']) $(id).addEventListener('input', refreshAssumptionsSheet);
+  $('a-std').addEventListener('change', () => { $('a-std').dataset.touched = '1'; });
+  $('a-hospital').addEventListener('change', () => { $('a-hospital').dataset.touched = '1'; });
+  $('a-help').addEventListener('change', refreshAssumptionsSheet);
+  $('a-family').addEventListener('change', refreshAssumptionsSheet);
+  $('a-cgt-add').addEventListener('click', () => { state.assume.draft.cgt.events.push(blankEvent()); renderCgtRows(); });
+  $('a-cancel').addEventListener('click', () => $('assume').close('cancel'));
+  $('a-save').addEventListener('click', () => saveAssumptions(collectAssumptions()));
+  // Close only on a true backdrop tap: a tap on the sheet's own rim (target is the dialog, but inside its box) does nothing.
+  $('assume').addEventListener('click', (e) => {
+    const dlg = $('assume');
+    if (e.target !== dlg) return;
+    const r = dlg.getBoundingClientRect();
+    const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    if (outside) dlg.close('cancel');
+  });
+}
+
+/* ----- Position cards ----- */
+function estimateHero(est, fy) {
+  const refund = est.result >= 0;
+  const today = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+  return h('div', { class: 'hero' },
+    h('div', { class: 'eyebrow' + (refund ? ' refund' : '') }, refund ? 'Estimated refund' : 'Estimated amount owing'),
+    h('div', { class: 'big ' + (refund ? 'refund' : 'owing') }, money(Math.abs(est.result))),
+    h('div', { class: 'sub' }, `FY${fy % 100}, as at today (${today})`),
+    h('div', { class: 'sub', style: 'margin-top:4px' }, `Taxable income ${money(est.taxableIncome, true)} (estimate) · ${Math.round(est.marginal * 1000) / 10}% on your next dollar`));
+}
+function renderChainCard(box, est, rates, fy) {
+  box.append(sect('How it is worked out'));
+  const rows = est.chain.filter((r) => !(r.optional && !r.value)).map((r) => {
+    const cls = r.kind === 'subtotal' ? 'total' : r.kind === 'result' ? 'total result' + (r.value < 0 ? ' owing' : '') : '';
+    return kv(r.label, money(r.kind === 'result' ? Math.abs(r.value) : r.value, true), cls);
+  });
+  if (est.notDeductions) rows.push(kv('Not deductions (offsets in the workbook)', money(est.notDeductions, true)));
+  const pills = est.warnings.length ? h('div', { class: 'pills' }, ...est.warnings.map((w) => h('span', { class: 'pill warn' }, w.text))) : null;
+  const provisional = est.provisional.map((p) => `${p.label}: ${p.year} figure, ${rates.label} not yet published`);
+  box.append(card(...rows, pills,
+    h('p', { class: 'note', style: 'margin-top:10px' }, h('span', { class: 'pill warn' }, 'Estimate'), ' ',
+      `Resident rates for ${rates.label}; the workbook figures are as recorded so far and the salary, PAYG and other figures come from your assumptions. Trust distributions and reportable fringe benefits can move this, so check it with your accountant.`),
+    h('p', { class: 'note', style: 'margin-top:8px' }, `Rates verified ${fmtYmd(rates.verifiedOn)}.${provisional.length ? ' ' + provisional.join('. ') + '.' : ''}`),
+    h('button', { class: 'btn block', type: 'button', style: 'margin-top:12px', onclick: openAssumptions }, 'Edit assumptions')));
+}
+function renderCgtCard(box, est, rates) {
+  const c = est.cgt;
+  if (!c.rows.length) return;
+  box.append(sect('Capital gains'));
+  const wrap = card();
+  for (const row of c.rows) {
+    const when = [row.bought && `bought ${fmtYmd(row.bought)}`, row.sold && `sold ${fmtYmd(row.sold)}`].filter(Boolean).join(', ');
+    wrap.append(h('div', { class: 'stream' },
+      h('div', { class: 'stream-head' }, h('span', { class: 'stream-name' }, row.asset || 'Asset'),
+        h('b', {}, row.gain == null ? '' : `${row.gain < 0 ? 'Loss ' : 'Gain '}${money(Math.abs(row.gain), true)}`)),
+      when ? h('small', {}, when) : null,
+      h('div', { class: 'pills', style: 'margin-top:6px' },
+        row.missingCostBase ? h('span', { class: 'pill warn' }, 'Cost base missing') : null,
+        !row.missingCostBase && row.proceeds == null ? h('span', { class: 'pill warn' }, 'Proceeds missing') : null,
+        row.heldOver12Months != null ? h('span', { class: 'pill' + (row.heldOver12Months ? '' : ' warn') }, row.heldOver12Months ? 'Held over 12 months' : 'Held under 12 months') : null,
+        row.gain != null && row.gain > 0 ? h('span', { class: 'pill' + (row.discountApplies ? '' : ' warn') }, row.discountApplies ? `${pct(rates.cgt.discount)} discount applied` : row.heldOver12Months == null ? 'Enter both dates for the discount test' : 'No discount') : null,
+        !row.inYear ? h('span', { class: 'pill warn' }, 'Sold outside this year') : null)));
+  }
+  const totals = [
+    kv('Gains', money(c.totalGains, true)),
+    c.yearLosses ? kv('Losses this year', money(-c.yearLosses, true)) : null,
+    c.carriedLoss ? kv('Loss carried forward', money(-c.carriedLoss, true)) : null,
+    c.discount ? kv(`${pct(rates.cgt.discount)} discount (held over ${rates.cgt.holdMonths} months)`, money(-c.discount, true)) : null,
+    kv('Net capital gain', money(c.net, true), 'total'),
+  ].filter(Boolean);
+  wrap.append(h('div', { style: 'margin-top:10px;border-top:1px solid var(--line);padding-top:6px' }, ...totals));
+  wrap.append(h('p', { class: 'note', style: 'margin-top:8px' }, 'Losses come off first, then the discount. Selling costs go in the cost base, not deductions.'));
+  box.append(wrap);
+}
+function renderAssumptionsPrompt(box) {
+  box.append(card(
+    h('b', {}, 'Add your salary and PAYG to see your refund or bill'),
+    h('p', { class: 'muted', style: 'margin:6px 0 10px' }, state.ratesError
+      ? `The rates file could not be loaded (${state.ratesError}), so only the indicative figure below is available. Try again later.`
+      : 'The workbook has your deductions and side income. Add what it cannot know and the Position tab shows your estimated refund or amount owing, with every step listed.'),
+    h('button', { class: 'btn primary block', type: 'button', disabled: !state.rates, onclick: openAssumptions }, 'Assumptions')));
+}
+
 
 /* ---------- accountant: a ready-to-send email draft (opens in the phone's mail app; you press Send) ---------- */
 function summaryEmailHref() {
@@ -870,6 +1194,15 @@ function summaryEmailHref() {
     `Here is where my FY${fy % 100} tax position stands, from my tax workbook (read ${new Date(p.at).toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })}).`, '',
     `Income: ${money(d.income, true)}`, `Deductions: ${money(d.deductions, true)}`, `Net income: ${money(d.net, true)}`, '',
   ];
+  const est = currentEstimate(d, fy);
+  if (est && est.hasAssumptions) {
+    lines.push(`Estimated ${est.result >= 0 ? 'refund' : 'amount owing'}: ${money(Math.abs(est.result), true)} (an estimate as at ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })})`,
+      `Taxable income (estimate): ${money(est.taxableIncome, true)}`,
+      `Worked out as: ${est.chain.filter((r) => ['tax', 'offset', 'credit'].includes(r.kind) && r.value).map((r) => `${r.label} ${money(r.value, true)}`).join(', ')}.`,
+      `Assumptions used: ${est.assumptionsUsed.join('; ')}.`);
+    if (est.warnings.length) lines.push(`Notes: ${est.warnings.map((w) => w.text).join('; ')}.`);
+    lines.push('');
+  }
   const active = d.streams.filter((s) => s.income || s.deductions);
   if (active.length) {
     lines.push('By income stream:');
@@ -923,6 +1256,13 @@ function buildTasks() {
   add(`resolutions-${fy}`, 'Sign trust distribution resolutions (due 30 June)', Date.UTC(fy, 5, 15), 'Income resolutions must be made by 30 June.');
   add(`gain-streaming-${fy}`, 'Record in writing who receives any capital gain (due 31 August)', Date.UTC(fy, 7, 15), 'Needed if a trust sells property this year.');
   add(`lodge-${fy}`, `Lodgement: confirm the plan with ${acc}`, Date.UTC(fy, 9, 1), 'The self-lodgement deadline is 31 October.');
+  const a = state.assume.data;
+  if (!(a && (Estimate.num(a.salary) > 0 || Estimate.projectedPayg(a) > 0))) {
+    add(`assumptions-${fy}`, 'Enter your salary and PAYG in Assumptions', Date.UTC(fy - 1, 9, 31), 'Open Assumptions on the Position tab so your refund or bill can be estimated.');
+  }
+  for (const ev of (a && a.cgt && a.cgt.events) || []) {
+    if (Estimate.num(ev.costBase) == null) add(`costbase-${slug(ev.asset || ev.id || 'asset')}`, `Find the cost base: ${ev.asset || 'asset'}`, null, 'Price paid plus buying costs, improvements and selling costs. Enter it in Assumptions.');
+  }
   if (d) {
     const hasGain = d.items.some((i) => /capital gain/i.test(i.label) && i.total);
     for (const x of d.dates) {
@@ -1564,6 +1904,135 @@ function streamLabel(name) {
 const shortLabel = (l) => l.replace(/\s*\((?:e\.g\.|for|from|related|not|if|where|including|fees)[^)]*\)/gi, '').trim();
 
 function kv(label, value, cls = '') { return h('div', { class: 'kv ' + cls }, h('span', {}, label), h('b', {}, value)); }
+
+/* ---- driving (mileage) ------------------------------------------------ */
+/* Hues validated against both surfaces for CVD separation and contrast; keep the order fixed. */
+const DRIVE_HUES = {
+  light: { work: '#1b5fd1', rental: '#e8590c', gym: '#8b5cf6', personal: '#0f9b8e' },
+  dark:  { work: '#4d8df0', rental: '#d16b16', gym: '#9470e8', personal: '#1fa894' },
+};
+const driveHue = (key) =>
+  (matchMedia('(prefers-color-scheme: dark)').matches ? DRIVE_HUES.dark : DRIVE_HUES.light)[key] || 'var(--muted)';
+const km = (n) => `${n.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} km`;
+
+async function loadVehicle() {
+  if (state.vehicle !== undefined) return;
+  state.vehicle = null;                        // claim the slot so we only fetch once
+  try {
+    const f = await readInboxFile('vehicle.json');
+    state.vehicle = f && f.text ? JSON.parse(f.text) : null;
+  } catch (e) { if (e instanceof AuthError) return needSignIn(); state.vehicle = null; }
+  if (state.tab === 'home') renderHome();
+}
+
+/* SVG donut. r chosen so the circumference is a round 100 => dasharray is literally a percentage. */
+function donut(slices, centre, sub) {
+  const R = 15.915, C = 2 * Math.PI * R;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 42 42');
+  svg.setAttribute('class', 'donut');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', slices.map((s) => `${s.label} ${s.pct.toFixed(0)}%`).join(', '));
+  const el = (tag, attrs) => {
+    const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
+  svg.append(el('circle', { class: 'track', cx: 21, cy: 21, r: R }));
+  let at = 0;
+  for (const s of slices) {
+    if (s.pct <= 0) continue;
+    const len = s.pct / 100 * C;
+    svg.append(el('circle', {
+      class: 'seg', cx: 21, cy: 21, r: R, stroke: s.colour,
+      /* 1.2 of surface between segments so neighbours never touch */
+      'stroke-dasharray': `${Math.max(0, len - 0.9)} ${C - Math.max(0, len - 0.9)}`,
+      'stroke-dashoffset': -at, 'stroke-linecap': 'butt',
+    }));
+    at += len;
+  }
+  const t = el('text', { x: 21, y: 20.2, 'text-anchor': 'middle', class: 'donut-mid' });
+  t.textContent = centre;
+  const s2 = el('text', { x: 21, y: 24.6, 'text-anchor': 'middle', class: 'donut-sub' });
+  s2.textContent = sub;
+  svg.append(t, s2);
+  return svg;
+}
+
+function renderDriving(box) {
+  const v = state.vehicle;
+  if (!v || !v.periods || !v.periods.length) return;
+  const keys = v.buckets.map((b) => b.key);
+  const ytd = {};
+  for (const k of keys) ytd[k] = v.periods.reduce((a, p) => a + (p.km[k] || 0), 0);
+  const ytdTotal = keys.reduce((a, k) => a + ytd[k], 0);
+  if (!ytdTotal) return;
+  const trips = v.periods.reduce((a, p) => a + (p.trips || 0), 0);
+
+  const meta = Object.fromEntries(v.buckets.map((b) => [b.key, b]));
+  const claimKeys = keys.filter((k) => meta[k].claimable);
+  const claimKm = claimKeys.reduce((a, k) => a + ytd[k], 0);
+  const claim = claimKm * v.ratePerKm;
+
+  box.append(sect('Driving'));
+  const c = card();
+
+  /* headline: what the year is worth so far */
+  c.append(h('div', { class: 'kv total' },
+    h('span', {}, `FY${v.fy % 100} claimable travel`), h('b', {}, money(claim, true))));
+  c.append(h('div', { class: 'kv' },
+    h('span', {}, `${km(claimKm)} at ${Math.round(v.ratePerKm * 100)}c`),
+    h('b', {}, `${km(ytdTotal)} driven · ${trips} trips`)));
+
+  /* YTD composition */
+  const slices = v.buckets.map((b) => ({ ...b, value: ytd[b.key], pct: ytd[b.key] / ytdTotal * 100, colour: driveHue(b.key) }))
+    .filter((s) => s.value > 0);
+  c.append(h('div', { class: 'drive-wrap', style: 'margin-top:14px' },
+    donut(slices, km(claimKm).replace(' km', ''), 'CLAIMED'),
+    h('div', { class: 'drive-legend' }, ...slices.map((s) => h('div', { class: 'row' },
+      h('i', { class: 'dot', style: `background:${s.colour}` }),
+      h('span', { class: 'nm' }, s.label),
+      h('span', { class: 'vl' }, km(s.value)),
+      h('span', { class: 'pc' }, `${s.pct.toFixed(0)}%`))))));
+
+  /* month on month: one stacked bar per month, shared scale so heights compare */
+  const peak = Math.max(...v.periods.map((p) => keys.reduce((a, k) => a + (p.km[k] || 0), 0)));
+  const months = h('div', { class: 'mom' });
+  for (const p of v.periods) {
+    const tot = keys.reduce((a, k) => a + (p.km[k] || 0), 0);
+    const col = h('div', { class: 'mom-col' });
+    const stack = h('div', { class: 'mom-stack', style: `height:${Math.max(4, tot / peak * 92).toFixed(1)}px` });
+    for (const k of keys) {
+      const val = p.km[k] || 0;
+      if (!val) continue;
+      stack.append(h('i', { style: `flex:${val};background:${driveHue(k)}`, title: `${meta[k].label} ${km(val)}` }));
+    }
+    col.append(h('b', {}, km(p.km[claimKeys[0]] || 0).replace(' km', '')), stack,
+      h('small', {}, p.label.slice(0, 3) + (p.partial ? '*' : '')));
+    months.append(col);
+  }
+  c.append(h('div', { class: 'sect', style: 'margin:16px 0 6px' }, 'Month on month'), months);
+  c.append(h('p', { class: 'note', style: 'margin-top:10px' }, 'Figure above each bar is the claimable km for that month. Bar height is total distance driven.'));
+
+  /* the cap */
+  const capPct = Math.min(100, claimKm / v.capKm * 100);
+  c.append(h('div', { class: 'kv', style: 'margin-top:12px' },
+    h('span', {}, `Against the ${v.capKm.toLocaleString('en-AU')} km cents-per-km cap`),
+    h('b', {}, `${capPct.toFixed(0)}%`)));
+  c.append(h('div', { class: 'progress', role: 'img', 'aria-label': `${capPct.toFixed(0)} per cent of the cap` },
+    h('i', { style: `width:${capPct.toFixed(1)}%` })));
+
+  const notClaim = slices.filter((s) => !s.claimable && s.why);
+  if (notClaim.length) {
+    const why = h('div', { class: 'drive-why' });
+    for (const s of notClaim) why.append(h('p', { style: 'margin:0 0 6px' }, h('b', {}, s.label + ': '), s.why));
+    c.append(why);
+  }
+  const part = v.periods.filter((p) => p.partial);
+  if (part.length) c.append(h('p', { class: 'note', style: 'margin-top:8px' },
+    h('span', { class: 'pill warn' }, 'Part month'), ' ', part.map((p) => p.partialNote).filter(Boolean).join(' ')));
+  box.append(c);
+}
 function card(...kids) { return h('div', { class: 'card' }, ...kids); }
 const sect = (t) => h('div', { class: 'sect' }, t);
 
@@ -1586,12 +2055,18 @@ function renderHome() {
   const start = Date.UTC(fy - 1, 6, 1), end = Date.UTC(fy, 5, 30);
   const total = Math.round((end - start) / DAY) + 1;
   const dayNo = Math.min(total, Math.max(0, Math.floor((todayUTC() - start) / DAY) + 1));
+  /* with assumptions saved, the refund-or-bill estimate leads and the net-income hero drops to second */
+  const est = currentEstimate(d, fy);
+  const hasEst = !!(est && est.hasAssumptions);
+  if (hasEst) box.append(estimateHero(est, fy));
   box.append(h('div', { class: 'hero' },
     h('div', { class: 'eyebrow' }, `FY${fy % 100} net income recorded`),
     h('div', { class: 'big' }, money(d.net)),
     h('div', { class: 'sub' }, `${money(d.income, true)} income less ${money(d.deductions, true)} deductions`),
     h('div', { class: 'progress', role: 'img', 'aria-label': `Day ${dayNo} of ${total}` }, h('i', { style: `width:${(dayNo / total * 100).toFixed(1)}%` })),
     h('div', { class: 'progress-label' }, h('span', {}, dayNo ? `Day ${dayNo} of ${total}` : `Starts ${relDays(start)}`), h('span', {}, dayNo >= total ? 'Year complete' : `${total - dayNo} days left`))));
+  /* OneDrive could not be read: the phone's copy of the assumptions is in use */
+  if (state.assume.error) box.append(h('p', { class: 'note', style: 'text-align:center;margin:-4px 0 10px' }, ASSUME_OFFLINE_NOTE));
 
   box.append(h('div', { class: 'tiles' },
     h('div', { class: 'tile in' }, h('small', {}, 'Income'), h('b', {}, money(d.income))),
@@ -1599,21 +2074,29 @@ function renderHome() {
 
   renderInboxPrompt(box);
   renderTasks(box);
+  renderDriving(box);
+  loadVehicle();
 
-  /* indicative tax */
-  const est = estimateTax(d.net, fy);
-  const taxRows = [
-    kv('Income tax', money(est.tax, true)),
-    kv('Medicare levy (2%)', money(est.medicare, true)),
-    kv('Estimated total', money(est.total, true), 'total'),
-    kv('Effective rate', pct(est.effective)),
-    kv('Rate on your next dollar', pct(est.marginal)),
-  ];
-  if (est.next) taxRows.push(kv(`Room before the ${pct(est.next.rate + 0.02)} rate`, money(est.next.room)));
-  box.append(sect('Indicative tax'),
-    card(...taxRows,
-      h('p', { class: 'note', style: 'margin-top:10px' }, h('span', { class: 'pill warn' }, 'Estimate'), ' ',
-        `Assumes resident rates for ${fy - 1}–${String(fy).slice(2)}, all net income taxed to you personally, and no offsets, PAYG credits or capital gains. Trust distributions and the share of income taxed to you can change this a lot, so use it as a guide and check with your accountant.`)));
+  if (hasEst) {
+    renderChainCard(box, est, state.rates, fy);
+    renderCgtCard(box, est, state.rates);
+  } else {
+    renderAssumptionsPrompt(box);
+    /* indicative tax (round 1): shown only until assumptions exist */
+    const est1 = estimateTax(d.net, fy);
+    const taxRows = [
+      kv('Income tax', money(est1.tax, true)),
+      kv('Medicare levy (2%)', money(est1.medicare, true)),
+      kv('Estimated total', money(est1.total, true), 'total'),
+      kv('Effective rate', pct(est1.effective)),
+      kv('Rate on your next dollar', pct(est1.marginal)),
+    ];
+    if (est1.next) taxRows.push(kv(`Room before the ${pct(est1.next.rate + 0.02)} rate`, money(est1.next.room)));
+    box.append(sect('Indicative tax'),
+      card(...taxRows,
+        h('p', { class: 'note', style: 'margin-top:10px' }, h('span', { class: 'pill warn' }, 'Estimate'), ' ',
+          `Assumes resident rates for ${fy - 1}-${String(fy).slice(2)}, all net income taxed to you personally, and no offsets, PAYG credits or capital gains. Trust distributions and the share of income taxed to you can change this a lot, so use it as a guide and check with your accountant.`)));
+  }
 
   /* by income stream */
   const active = d.streams.filter((s) => s.income || s.deductions);
@@ -1692,10 +2175,11 @@ function renderHome() {
     kv('Workbook last saved', p.modified ? fmtDate(p.modified) : 'Unknown')));
   box.append(h('div', { class: 'actions', style: 'margin-top:12px' },
     h('button', { class: 'btn primary', type: 'button', onclick: () => $('tab-add').click() }, 'Add receipt'),
-    p.webUrl ? h('a', { class: 'btn', href: p.webUrl, target: '_blank', rel: 'noopener' }, 'Open workbook') : null));
+    p.webUrl ? h('a', { class: 'btn', href: p.webUrl, target: '_blank', rel: 'noopener' }, 'Open workbook') : null,
+    h('button', { class: 'btn', type: 'button', id: 'btn-assume', disabled: !state.rates, onclick: openAssumptions }, 'Assumptions')));
   box.append(h('p', { class: 'note', style: 'text-align:center;margin-top:14px' },
     state.positionBusy ? 'Updating from OneDrive…' : state.positionError ? `Couldn't update (${state.positionError}). Showing figures from ${ago(p.at)}.` : `Figures from ${p.name}, read ${ago(p.at)}.`,
-    ' ', h('button', { class: 'btn quiet', type: 'button', style: 'min-height:36px;padding:0 8px', onclick: () => refreshPosition(true) }, 'Refresh')));
+    ' ', h('button', { class: 'btn quiet', type: 'button', style: 'min-height:44px;padding:0 8px', onclick: () => refreshPosition(true) }, 'Refresh')));
 }
 
 /* ---------- app lock: Face ID / Touch ID / fingerprint, through the phone's passkey prompt ---------- */
@@ -1765,7 +2249,7 @@ function openSettings() {
   renderLockRow();
   $('settings').showModal();
 }
-function signOut() { for (const k of ['tokens', 'pkce', 'lock', 'snapshot', 'apiKey', 'askThread']) ls.del(k); location.replace(redirectUri()); }
+function signOut() { for (const k of ['tokens', 'pkce', 'lock', 'snapshot', 'apiKey', 'askThread', 'assumptions']) ls.del(k); location.replace(redirectUri()); }
 
 /* ---------- wire up ---------- */
 function wire() {
@@ -1799,6 +2283,8 @@ function wire() {
   $('in-camera').addEventListener('change', (e) => onPicked(e.target.files[0]));
   $('in-file').addEventListener('change', (e) => onPicked(e.target.files[0]));
   $('btn-clear').addEventListener('click', clearPending);
+  $('btn-paste').addEventListener('click', pasteFromClipboard);
+  document.addEventListener('paste', onPasteEvent);
   $('btn-scan').addEventListener('click', async () => {
     try {
       if (typeof Scanner === 'undefined') {
@@ -1840,6 +2326,7 @@ function wire() {
   $('btn-unlock').addEventListener('click', () => unlock(false));
   $('btn-lock-reset').addEventListener('click', signOut);
   $('s-signout').addEventListener('click', signOut);
+  wireAssumptions();
 }
 
 async function boot() {

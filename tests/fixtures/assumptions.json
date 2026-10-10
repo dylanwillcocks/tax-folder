@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "savedAt": "2026-10-10T08:00:00.000Z",
+  "salary": 120000,
+  "paygWithheld": 9000,
+  "paygPerPay": 1150,
+  "paysLeft": 18,
+  "dividends": 1200,
+  "franking": 514.29,
+  "interest": 310,
+  "trust": null,
+  "other": null,
+  "super": null,
+  "incomeProtection": null,
+  "useStandardDeduction": null,
+  "includeCtr": false,
+  "help": { "has": true, "balance": 20000 },
+  "hospitalCover": true,
+  "family": { "status": "single", "children": 0, "spouseIncome": null },
+  "cgt": {
+    "carriedLoss": null,
+    "events": [
+      { "id": "wbc-shares", "asset": "ABC shares", "bought": "2025-03-01", "costBase": 10000, "sold": "2026-07-06", "proceeds": 13775, "note": "" },
+      { "id": "marsden", "asset": "12 Sample Street, Sampleton", "bought": "", "costBase": null, "sold": "", "proceeds": null,
+        "note": "Selling costs and the items marked Capital Improvements in the property's sheet belong in the cost base; the contract date is the CGT date." }
+    ]
+  }
+}
